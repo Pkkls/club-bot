@@ -31,12 +31,12 @@ async function restoreSession(page) {
 async function checkLoggedIn(page) {
   try {
     const result = await page.evaluate(async (base) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open("GET", base + "/api/feed?type=hot&limit=1", false);
-      xhr.withCredentials = true;
-      xhr.send();
-      return xhr.status;
+      try {
+        const r = await fetch(base + "/api/feed?type=hot&limit=1", { credentials: "include" });
+        return r.status;
+      } catch { return 0; }
     }, BASE);
+    console.log(`[session] auth check → HTTP ${result}`);
     return result === 200;
   } catch { return false; }
 }
@@ -101,7 +101,14 @@ async function ensureLoggedIn(page, EMAIL, PASSWORD) {
     }
     console.log("[session] cookies expired, re-logging in...");
   }
-  await login(page, EMAIL, PASSWORD);
+  try {
+    await login(page, EMAIL, PASSWORD);
+  } catch (e) {
+    // Google blocks headless login — exit cleanly rather than crashing
+    console.error("[session] login failed (Google blocks headless):", e.message);
+    console.log("[session] exiting cleanly — update COOKIES_CXFAN_B64 secret to fix.");
+    process.exit(0);
+  }
 }
 
 module.exports = { ensureLoggedIn, saveCookies };
