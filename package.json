@@ -1,0 +1,12 @@
+{
+  "name": "club-bot",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "bot": "node bot.js"
+  },
+  "dependencies": {
+    "puppeteer": "^22.0.0",
+    "@anthropic-ai/sdk": "^0.40.0"
+  }
+}

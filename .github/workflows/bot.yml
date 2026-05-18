@@ -1,0 +1,54 @@
+name: Club Bot
+
+on:
+  schedule:
+    # 4 runs/day: 8h, 13h, 18h, 21h UTC (ajuste selon ton timezone)
+    - cron: "0 8,13,18,21 * * *"
+  workflow_dispatch:
+    inputs:
+      account:
+        description: "Account name (default=cxfan)"
+        default: "cxfan"
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Ajoute des comptes ici quand tu en as plus
+        account:
+          - name: cxfan
+            email_secret: CLUB_EMAIL_CXFAN
+            password_secret: CLUB_PASSWORD_CXFAN
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Puppeteer browser
+        run: npx puppeteer browsers install chrome
+
+      - name: Run bot
+        env:
+          CLUB_EMAIL: ${{ secrets[matrix.account.email_secret] }}
+          CLUB_PASSWORD: ${{ secrets[matrix.account.password_secret] }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ACCOUNT_NAME: ${{ matrix.account.name }}
+        run: node bot.js
+
+      - name: Upload error screenshot if failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-${{ matrix.account.name }}
+          path: error.png
