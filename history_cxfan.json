@@ -1,34 +1,5 @@
 {
   "account": "cxfan",
-  "comments": [
-    {
-      "ts": "2026-05-18T19:06:51.030Z",
-      "postId": "5ed17a6e-4e6d-4be2-b9ca-c7a9819c8755",
-      "commentId": "083bd996-bb2b-42e7-84ca-14173ec54b59",
-      "creator": "unknown",
-      "comment": "this one would actually change things",
-      "caption": ""
-    },
-    {
-      "ts": "2026-05-18T19:06:58.130Z",
-      "postId": "ab2e4033-1390-4d79-94b0-00831cc3ee04",
-      "commentId": "b54cdad9-dfe1-467d-9788-35105f025cb9",
-      "creator": "unknown",
-      "comment": "w",
-      "caption": ""
-    },
-    {
-      "ts": "2026-05-18T19:07:06.306Z",
-      "postId": "53454733-cd2f-45e5-8313-09c628c23460",
-      "commentId": "8b5bd7e9-8fde-455e-9598-de6b740d6fdf",
-      "creator": "unknown",
-      "comment": "fair enough",
-      "caption": ""
-    }
-  ],
-  "follows": [
-    { "ts": "2026-05-18T19:06:00.000Z", "username": "bijan" },
-    { "ts": "2026-05-18T19:06:00.000Z", "username": "henrik" },
-    { "ts": "2026-05-18T19:06:00.000Z", "username": "eddie" }
-  ]
+  "comments": [],
+  "follows": []
 }
