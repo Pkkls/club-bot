@@ -151,18 +151,39 @@ Rules:
 - Clean language — no slurs, no "fuck/shit" (platform rules)
 - If the post gives you nothing specific to say, return empty string. Silence beats a generic comment every time.`;
 
-const REPLY_PROMPT = `You are cxfan, a 23yo American stream viewer. Someone replied to your comment on Club.com.
+const REPLY_PROMPT = `You are cxfan, a 23yo American who watches streams. Someone replied to your comment on Club.com.
 
-Your original comment: "{ORIGINAL}"
-Their reply: "{REPLY}"
+You will receive:
+- The original post context (what the post was about)
+- Your comment you left
+- The reply someone sent you
 
-Write a short response IF it's worth engaging with. Rules:
-- 1 sentence max, conversational
-- Same banned words as usual: no "w", "facts", "bro", "ngl", "fire", generic hype
-- If their reply is just a reaction emoji or single word, return empty string (don't bother)
-- You're slightly contrarian — you don't agree just to agree
+Your job is to decide TWO things:
+1. Does this reply actually deserve a response? (most don't)
+2. If yes, what would a real person say — based on the FULL context, not just reacting to the reply in isolation
+
+WHEN TO RETURN EMPTY STRING (no reply):
+- Their reply is 1-2 words or emoji only ("lol", "same", "fr", "💀")
+- Their reply is generic agreement with nothing to add to
+- You already made your point and they're just acknowledging it
+- Responding would feel forced or like you're chasing engagement
+- You have nothing new or specific to add
+
+WHEN TO ACTUALLY REPLY:
+- They asked you something specific that you have an actual answer to
+- They pushed back on something you said — and you disagree with their pushback
+- They added info that changes or builds on what you said
+- There's a natural back-and-forth that would happen between two real people who just happen to be watching the same thing
+
+HOW TO REPLY (if you do):
+- Answer the SPECIFIC thing they said, not a generic "yeah" or "exactly"
+- Your reply should make sense to someone reading the full thread
+- 1 sentence, lowercase, conversational pace
+- Don't be agreeable for the sake of it — Tyler has his own take
 - Clean language (no slurs, no fuck/shit)
-- If nothing real to add, return empty string`;
+- Same banned list: no "w", "facts", "bro", "ngl", "fire", "based", "fair enough", "literally", "lowkey"
+
+Return your reply text only, or empty string if not worth responding.`;
 
 async function generateComment(post, imageB64 = null) {
   if (!ANTHROPIC_KEY) return null;
@@ -178,12 +199,25 @@ async function generateComment(post, imageB64 = null) {
   } catch (e) { console.error("[claude] comment error:", e.message); return null; }
 }
 
-async function generateReply(originalComment, theirReply) {
+async function generateReply(postCaption, originalComment, theirReply, theirUsername) {
   if (!ANTHROPIC_KEY) return null;
   const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
-  const prompt = REPLY_PROMPT.replace("{ORIGINAL}", originalComment).replace("{REPLY}", theirReply);
+
+  const context = [
+    postCaption ? `Post context: "${postCaption.substring(0, 300)}"` : "Post context: (no caption — media post)",
+    `Your comment: "${originalComment}"`,
+    `@${theirUsername} replied: "${theirReply}"`,
+    "",
+    "Reply with a single sentence if it genuinely warrants a response, or return empty string:",
+  ].join("\n");
+
   try {
-    const msg = await client.messages.create({ model: "claude-haiku-4-5", max_tokens: 80, system: prompt, messages: [{ role: "user", content: "Write your reply (or empty string):" }] });
+    const msg = await client.messages.create({
+      model: "claude-haiku-4-5",
+      max_tokens: 80,
+      system: REPLY_PROMPT,
+      messages: [{ role: "user", content: context }],
+    });
     const text = msg.content[0].text.trim().replace(/^["']|["']$/g, "");
     return text.length < 3 ? null : text;
   } catch (e) { console.error("[claude] reply error:", e.message); return null; }
@@ -246,7 +280,7 @@ async function checkAndHandleReplies(page, state, history) {
 
         if (decide) {
           await sleep(rand(5000, 15000)); // small pause before generating reply
-          const replyText = await generateReply(ourComment.comment, reply.text || "");
+          const replyText = await generateReply(ourComment.caption, ourComment.comment, reply.text || "", reply.user?.username || "user");
           if (replyText) {
             const res = await api(page, "POST", `/api/feed/${ourComment.postId}/comments`, { text: replyText, parentId: ourComment.commentId });
             if (res && !res._error) {
