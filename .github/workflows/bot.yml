@@ -2,8 +2,9 @@ name: Club Bot
 
 on:
   schedule:
-    # Runs every 2h — bot decides internally based on Tyler's schedule whether to actually post
-    - cron: "0 */2 * * *"
+    # Once per day at a random-ish hour — bot decides internally whether to post
+    # Tyler checks the app once a day max, rarely comments
+    - cron: "37 19 * * *"
   workflow_dispatch:
 
 jobs:

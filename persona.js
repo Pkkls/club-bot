@@ -62,19 +62,17 @@ function getActivityProbability() {
 }
 
 // How many comments Tyler will make this session (if active)
-// Small platform → stay low
+// Small beta platform — Tyler barely knows about it, checks occasionally
+// Target: ~6-8 comments/month (1-2/week), some weeks 0
 function getSessionCommentBudget(dailyCommentsSoFar) {
-  // Already commented today → much less likely to comment again
-  if (dailyCommentsSoFar >= 3) return 0;
-  if (dailyCommentsSoFar === 2) return Math.random() < 0.15 ? 1 : 0;
-  if (dailyCommentsSoFar === 1) return Math.random() < 0.4 ? 1 : 0;
+  // Never comment twice in the same day on a small platform
+  if (dailyCommentsSoFar >= 1) return 0;
 
-  // Fresh day: 0 comments yet
+  // Only ~25% chance of commenting on any given active session
+  // → roughly 1-2 comments per week
   const roll = Math.random();
-  if (roll < 0.25) return 0;   // 25% — nothing caught his eye
-  if (roll < 0.75) return 1;   // 50% — 1 comment
-  if (roll < 0.95) return 2;   // 20% — 2 comments (good content day)
-  return 3;                    // 5%  — active day (weekend/drama)
+  if (roll < 0.75) return 0;  // 75% — Tyler opened the app, scrolled, closed it
+  return 1;                   // 25% — something actually caught his eye
 }
 
 // Should Tyler follow someone this session?
