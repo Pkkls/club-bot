@@ -28,23 +28,30 @@ async function restoreSession(page) {
   return true;
 }
 
-async function checkLoggedIn(page) {
-  try {
-    // Debug: log what cookies Puppeteer actually has
-    const cookies = await page.cookies();
-    console.log(`[session] cookies in page: ${cookies.map(c => c.name).join(", ") || "(none)"}`);
-
-    const { status, body } = await page.evaluate(async (base) => {
-      try {
-        const r = await fetch(base + "/api/feed?type=hot&limit=1", { credentials: "include" });
-        const body = await r.text().catch(() => "");
-        return { status: r.status, body: body.slice(0, 200) };
-      } catch (e) { return { status: 0, body: e.message }; }
-    }, BASE);
-    console.log(`[session] auth check → HTTP ${status} | ${body}`);
-    const result = status;
-    return result === 200;
-  } catch { return false; }
+async function checkLoggedIn() {
+  const token = loadCookies()?.find(c => c.name === "chatAuthToken")?.value;
+  if (!token) { console.log("[session] no chatAuthToken found"); return false; }
+  return new Promise((resolve) => {
+    const req = require("https").request(
+      {
+        hostname: "club.com",
+        path: "/api/feed?type=hot&limit=1",
+        method: "GET",
+        headers: {
+          "Cookie": `chatAuthToken=${token}`,
+          "Accept": "application/json",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        },
+      },
+      (res) => {
+        console.log(`[session] auth check → HTTP ${res.statusCode}`);
+        res.resume();
+        resolve(res.statusCode < 400);
+      }
+    );
+    req.on("error", () => resolve(false));
+    req.end();
+  });
 }
 
 async function login(page, EMAIL, PASSWORD) {
@@ -96,35 +103,41 @@ async function login(page, EMAIL, PASSWORD) {
 }
 
 async function ensureLoggedIn(page, EMAIL, PASSWORD) {
-  // Try restoring existing session
-  const restored = await restoreSession(page);
-  if (restored) {
-    // Log token BEFORE navigation
-    const before = await page.cookies();
-    const tokBefore = before.find(c => c.name === "chatAuthToken");
-    console.log(`[session] chatAuthToken before goto: ${tokBefore?.value?.slice(0,20) || "MISSING"}`);
-
-    await page.goto(BASE, { waitUntil: "networkidle2", timeout: 30000 });
-
-    // Log token AFTER navigation
-    const after = await page.cookies();
-    const tokAfter = after.find(c => c.name === "chatAuthToken");
-    console.log(`[session] chatAuthToken after goto:  ${tokAfter?.value?.slice(0,20) || "MISSING"}`);
-
-    const ok = await checkLoggedIn(page);
-    if (ok) {
-      console.log("[session] restored from cookies ✅");
-      return;
-    }
-    console.log("[session] cookies expired, re-logging in...");
+  // Check token directly via HTTPS — no browser needed
+  const ok = await checkLoggedIn();
+  if (ok) {
+    console.log("[session] token valid ✅");
+    return;
   }
-  try {
-    await login(page, EMAIL, PASSWORD);
-  } catch (e) {
-    // Google blocks headless login — exit cleanly rather than crashing
-    console.error("[session] login failed (Google blocks headless):", e.message);
-    console.log("[session] exiting cleanly — update COOKIES_CXFAN_B64 secret to fix.");
-    process.exit(0);
+  console.log("[session] token invalid, attempting Puppeteer login...");
+  if (!page) {
+    // Spin up a browser just for login
+    const puppeteer = require("puppeteer-extra");
+    const Stealth   = require("puppeteer-extra-plugin-stealth");
+    puppeteer.use(Stealth());
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ["--no-sandbox","--disable-setuid-sandbox","--disable-blink-features=AutomationControlled","--window-size=1920,1080","--lang=en-US"],
+      defaultViewport: { width: 1920, height: 1080 },
+    });
+    const p = await browser.newPage();
+    try {
+      await login(p, EMAIL, PASSWORD);
+    } catch (e) {
+      console.error("[session] login failed:", e.message);
+      console.log("[session] exiting cleanly — update COOKIES_CXFAN_B64 secret.");
+      await browser.close();
+      process.exit(0);
+    }
+    await browser.close();
+  } else {
+    try {
+      await login(page, EMAIL, PASSWORD);
+    } catch (e) {
+      console.error("[session] login failed:", e.message);
+      console.log("[session] exiting cleanly — update COOKIES_CXFAN_B64 secret.");
+      process.exit(0);
+    }
   }
 }
 

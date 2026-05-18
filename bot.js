@@ -10,6 +10,7 @@ const puppeteer  = require("puppeteer-extra");
 const Stealth    = require("puppeteer-extra-plugin-stealth");
 const AnonUA     = require("puppeteer-extra-plugin-anonymize-ua");
 const Groq       = require("groq-sdk");
+const https      = require("https");
 const fs         = require("fs");
 const path       = require("path");
 const persona    = require("./persona");
@@ -110,16 +111,44 @@ function logFollow(history, username) {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const rand  = (a, b) => Math.floor(Math.random() * (b - a) + a);
 
-async function api(page, method, endpoint, body) {
-  return page.evaluate(async ({ method, endpoint, body, base }) => {
-    try {
-      const opts = { method, headers: {}, credentials: "include" };
-      if (body) { opts.headers["content-type"] = "application/json"; opts.body = JSON.stringify(body); }
-      const r = await fetch(base + endpoint, opts);
-      if (!r.ok) return { _error: r.status };
-      return r.json().catch(() => null);
-    } catch (e) { return { _error: -1, _msg: e.message }; }
-  }, { method, endpoint, body, base: BASE });
+function getAuthToken() {
+  try {
+    const cookies = JSON.parse(fs.readFileSync(path.join(process.cwd(), "cookies_cxfan.json"), "utf8"));
+    return cookies.find(c => c.name === "chatAuthToken")?.value || null;
+  } catch { return null; }
+}
+
+// Direct HTTPS call — bypasses Puppeteer/aws-waf-token (curl-equivalent)
+async function api(method, endpoint, body) {
+  const token = getAuthToken();
+  return new Promise((resolve) => {
+    const url     = new URL(BASE + endpoint);
+    const bodyStr = body ? JSON.stringify(body) : null;
+    const headers = {
+      "Cookie":       token ? `chatAuthToken=${token}` : "",
+      "Content-Type": "application/json",
+      "Accept":       "application/json",
+      "User-Agent":   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+      "Origin":       "https://club.com",
+      "Referer":      "https://club.com/",
+    };
+    if (bodyStr) headers["Content-Length"] = Buffer.byteLength(bodyStr);
+    const req = https.request(
+      { hostname: url.hostname, path: url.pathname + url.search, method, headers },
+      (res) => {
+        let data = "";
+        res.on("data", d => data += d);
+        res.on("end", () => {
+          if (res.statusCode === 204) { resolve({}); return; }
+          try { resolve(JSON.parse(data)); }
+          catch { resolve({ _error: res.statusCode }); }
+        });
+      }
+    );
+    req.on("error", e => resolve({ _error: -1, _msg: e.message }));
+    if (bodyStr) req.write(bodyStr);
+    req.end();
+  });
 }
 
 // ─── Persona prompt ───────────────────────────────────────────────────────────
@@ -189,7 +218,7 @@ HOW TO REPLY (if you do):
 
 Return your reply text only, or empty string if not worth responding.`;
 
-async function generateComment(post, imageB64 = null) {
+async function generateComment(post) {
   if (!GROQ_KEY) return null;
   const client = new Groq({ apiKey: GROQ_KEY });
   const caption = (post.caption || "").trim().substring(0, 400);
@@ -270,15 +299,6 @@ async function generateReply(postCaption, originalComment, theirReply, theirUser
   } catch (e) { console.error("[groq] reply error:", e.message); return null; }
 }
 
-async function fetchImageB64(page, url) {
-  if (!url) return null;
-  try {
-    return await page.evaluate(async (u) => {
-      try { const r = await fetch(u); if (!r.ok) return null; const b = await r.blob(); return new Promise(res => { const rd = new FileReader(); rd.onload = () => res(rd.result.split(",")[1]); rd.onerror = () => res(null); rd.readAsDataURL(b); }); }
-      catch { return null; }
-    }, url);
-  } catch { return null; }
-}
 
 // ─── Score posts ──────────────────────────────────────────────────────────────
 function scorePost(p) {
@@ -289,7 +309,7 @@ function scorePost(p) {
 }
 
 // ─── Reply checking ───────────────────────────────────────────────────────────
-async function checkAndHandleReplies(page, state, history) {
+async function checkAndHandleReplies(state, history) {
   const recentComments = history.comments.filter(c => {
     if (c.isReply) return false;
     const ageH = (Date.now() - new Date(c.ts).getTime()) / 3600000;
@@ -305,7 +325,7 @@ async function checkAndHandleReplies(page, state, history) {
     if (!ourComment.postId || !ourComment.commentId) continue;
 
     try {
-      const data = await api(page, "GET", `/api/feed/${ourComment.postId}/comments?limit=100`, null);
+      const data = await api("GET", `/api/feed/${ourComment.postId}/comments?limit=100`, null);
       const allComments = data?.data || data?.comments || [];
 
       // Find replies to our specific comment
@@ -329,7 +349,7 @@ async function checkAndHandleReplies(page, state, history) {
           await sleep(rand(5000, 15000)); // small pause before generating reply
           const replyText = await generateReply(ourComment.caption, ourComment.comment, reply.text || "", reply.user?.username || "user");
           if (replyText) {
-            const res = await api(page, "POST", `/api/feed/${ourComment.postId}/comments`, { text: replyText, parentId: ourComment.commentId });
+            const res = await api("POST", `/api/feed/${ourComment.postId}/comments`, { text: replyText, parentId: ourComment.commentId });
             if (res && !res._error) {
               repliesSent++;
               logComment(history, {
@@ -365,7 +385,7 @@ async function checkAndHandleReplies(page, state, history) {
 // Login handled by session.js (cookie-based, Google OAuth only when expired)
 
 // ─── Main session ─────────────────────────────────────────────────────────────
-async function runSession(page, state, history) {
+async function runSession(state, history) {
   // 1. Check Tyler's activity window
   const activityProb = persona.getActivityProbability();
   if (Math.random() > activityProb) {
@@ -375,7 +395,7 @@ async function runSession(page, state, history) {
 
   // 2. Check reply queue first (non-intrusive, Tyler checking his notifications)
   console.log("[session] checking replies...");
-  const repliesSent = await checkAndHandleReplies(page, state, history);
+  const repliesSent = await checkAndHandleReplies(state, history);
 
   // 3. Determine comment budget for today
   const done = commentsToday(history);
@@ -386,7 +406,7 @@ async function runSession(page, state, history) {
     console.log("[session] no comment budget — Tyler is just browsing");
     // Still browse a bit (human signal)
     const feeds = ["/api/feed?type=hot&limit=20", "/api/feed?type=new&limit=20"];
-    for (const f of feeds) { await api(page, "GET", f, null); await sleep(rand(3000, 8000)); }
+    for (const f of feeds) { await api("GET", f, null); await sleep(rand(3000, 8000)); }
     return;
   }
 
@@ -394,7 +414,7 @@ async function runSession(page, state, history) {
   const seen = new Map();
   for (const ep of ["/api/feed?type=hot&limit=40", "/api/feed?type=new&limit=40", "/api/feed?type=discover&limit=30"]) {
     try {
-      const data = await api(page, "GET", ep, null);
+      const data = await api("GET", ep, null);
       for (const p of (data?.data || data?.posts || [])) {
         const c = p.creator || p.user;
         if (c?.username && !seen.has(p.id) && !state.commented.includes(p.id)) {
@@ -430,7 +450,7 @@ async function runSession(page, state, history) {
   for (const post of likeCandidates.sort(() => Math.random() - 0.5)) {
     if (liked >= likeCount) break;
     await sleep(rand(2000, 6000));
-    const r = await api(page, "POST", `/api/feed/${post.id}/likes`, {});
+    const r = await api("POST", `/api/feed/${post.id}/likes`, {});
     if (r && !r._error) {
       state.liked.push(post.id);
       if (state.liked.length > 500) state.liked = state.liked.slice(-400);
@@ -465,7 +485,7 @@ async function runSession(page, state, history) {
 
       // Visit profile
       if (!state.visited.includes(creator.username)) {
-        await api(page, "POST", "/api/users/me/profile-visits", { creatorId: creator.id });
+        await api("POST", "/api/users/me/profile-visits", { creatorId: creator.id });
         state.visited.push(creator.username);
         if (state.visited.length > 500) state.visited = state.visited.slice(-300);
         await sleep(rand(1500, 4000));
@@ -473,7 +493,7 @@ async function runSession(page, state, history) {
 
       // Follow (sometimes)
       if (!state.followed.includes(creator.username) && persona.shouldFollow(false)) {
-        const r = await api(page, "POST", `/api/follows/${creator.id}`, {});
+        const r = await api("POST", `/api/follows/${creator.id}`, {});
         if (r && !r._error) {
           state.followed.push(creator.username);
           logFollow(history, creator.username);
@@ -486,15 +506,12 @@ async function runSession(page, state, history) {
       // Simulate reading the post
       await sleep(rand(3000, 8000));
 
-      // Get image for Vision
-      const imageB64 = await fetchImageB64(page, post.thumbnailUrl || post.imageUrl || null);
-
       // Generate comment
-      const comment = await generateComment(post, imageB64);
+      const comment = await generateComment(post);
       if (!comment) { console.log(`[session] nothing to say on @${creator.username}`); continue; }
 
       // Post it
-      const res = await api(page, "POST", `/api/feed/${post.id}/comments`, { text: comment });
+      const res = await api("POST", `/api/feed/${post.id}/comments`, { text: comment });
       if (!res || res._error) { console.log(`[session] post failed on @${creator.username}`); continue; }
 
       const commentId = res.id || res.data?.id;
@@ -504,7 +521,7 @@ async function runSession(page, state, history) {
       const approved = await verifyComment(caption, comment);
       if (!approved) {
         console.log(`[session] ❌ verification failed — deleting and trying next post`);
-        await api(page, "DELETE", `/api/feed/${post.id}/comments/${commentId}`, null);
+        await api("DELETE", `/api/feed/${post.id}/comments/${commentId}`, null);
         await sleep(rand(3000, 7000));
         continue;
       }
@@ -525,7 +542,7 @@ async function runSession(page, state, history) {
       // Like after commenting — with human delay (amélioration #5 partiel)
       if (Math.random() < 0.55) {
         await sleep(rand(30000, 90000)); // Tyler reads other comments first
-        await api(page, "POST", `/api/feed/${post.id}/likes`, {});
+        await api("POST", `/api/feed/${post.id}/likes`, {});
       }
 
       await sleep(rand(15000, 35000));
@@ -561,28 +578,17 @@ async function main() {
   }
 
   console.log(`\n===== Club Bot — cxfan =====`);
-  const fp      = buildFingerprint();
   const state   = loadState();
   const history = loadHistory();
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox","--disable-setuid-sandbox","--disable-blink-features=AutomationControlled",`--window-size=1920,1080`,"--lang=en-US"],
-    defaultViewport: fp.viewport,
-  });
-
-  const page = await initPage(browser, fp);
-
   try {
-    // Check Telegram commands (/history) before doing anything else
     await checkCommands(history);
 
-    await ensureLoggedIn(page, EMAIL, PASSWORD);
+    // Check token validity — if invalid, attempt login via Puppeteer
+    await ensureLoggedIn(null, EMAIL, PASSWORD);
 
-    // 72h metrics check (runs quickly, no extra navigation)
-    await checkCommentMetrics(page, history);
-
-    await runSession(page, state, history);
+    await checkCommentMetrics(history);
+    await runSession(state, history);
     saveState(state);
 
     if (shouldSendDigest(state)) {
@@ -593,13 +599,9 @@ async function main() {
     }
   } catch (e) {
     console.error("[fatal]", e.message);
-    try { await page.screenshot({ path: "error.png" }); } catch {}
-    // Notify Telegram on crash
     try { await sendMessage(`⚠️ <b>cxfan bot crashed</b>\n${e.message}`); } catch {}
     saveState(state);
     process.exit(1);
-  } finally {
-    await browser.close();
   }
 }
 

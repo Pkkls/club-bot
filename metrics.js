@@ -4,9 +4,47 @@
  * Also detects who followed us back (for network H).
  */
 
-const BASE = "https://club.com";
+const https = require("https");
+const fs    = require("fs");
+const path  = require("path");
 
-async function checkCommentMetrics(page, history) {
+const COOKIES_FILE = path.join(process.cwd(), "cookies_cxfan.json");
+
+function getToken() {
+  try {
+    const c = JSON.parse(fs.readFileSync(COOKIES_FILE, "utf8"));
+    return c.find(x => x.name === "chatAuthToken")?.value || null;
+  } catch { return null; }
+}
+
+function apiGet(endpoint) {
+  const token = getToken();
+  return new Promise((resolve) => {
+    const req = https.request(
+      {
+        hostname: "club.com",
+        path: endpoint,
+        method: "GET",
+        headers: {
+          "Cookie": token ? `chatAuthToken=${token}` : "",
+          "Accept": "application/json",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        },
+      },
+      (res) => {
+        let data = "";
+        res.on("data", d => data += d);
+        res.on("end", () => {
+          try { resolve(JSON.parse(data)); } catch { resolve(null); }
+        });
+      }
+    );
+    req.on("error", () => resolve(null));
+    req.end();
+  });
+}
+
+async function checkCommentMetrics(history) {
   const now      = Date.now();
   const hours72  = 72 * 3600000;
   const unchecked = history.comments.filter(c =>
@@ -22,14 +60,7 @@ async function checkCommentMetrics(page, history) {
 
   for (const c of unchecked) {
     try {
-      const data = await page.evaluate(async ({ base, postId, commentId }) => {
-        try {
-          const r = await fetch(`${base}/api/feed/${postId}/comments?limit=100`, { credentials: "include" });
-          if (!r.ok) return null;
-          return r.json();
-        } catch { return null; }
-      }, { base: BASE, postId: c.postId, commentId: c.commentId });
-
+      const data = await apiGet(`/api/feed/${c.postId}/comments?limit=100`);
       const comments = data?.data || data?.comments || [];
       const ours = comments.find(x => x.id === c.commentId);
 
@@ -37,7 +68,6 @@ async function checkCommentMetrics(page, history) {
         c.likesReceived   = ours.likeCount || 0;
         c.repliesReceived = (ours.replies || []).length;
 
-        // Log repliers to network
         if (!history.network) history.network = {};
         for (const reply of (ours.replies || [])) {
           const u = reply.user?.username;
