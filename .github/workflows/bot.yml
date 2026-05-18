@@ -2,28 +2,13 @@ name: Club Bot
 
 on:
   schedule:
-    # 4x/day at random-ish hours (not on the hour = less bot-like)
     - cron: "17 8,14,19,22 * * *"
   workflow_dispatch:
-    inputs:
-      account:
-        description: "Account name"
-        default: "cxfan"
 
 jobs:
   run-bot:
-    # Use self-hosted runner (your PC = residential IP) if available,
-    # otherwise fall back to GitHub's ubuntu (datacenter IP — higher detection risk)
     runs-on: ${{ vars.USE_SELF_HOSTED == 'true' && 'self-hosted' || 'ubuntu-latest' }}
     timeout-minutes: 20
-
-    strategy:
-      fail-fast: false
-      matrix:
-        account:
-          - name: cxfan
-            email_secret: CLUB_EMAIL_CXFAN
-            password_secret: CLUB_PASSWORD_CXFAN
 
     steps:
       - uses: actions/checkout@v4
@@ -39,38 +24,36 @@ jobs:
       - name: Install Puppeteer browser
         run: npx puppeteer browsers install chrome
 
-      # Restore persisted state from previous run (warmup progress, commented IDs, etc.)
       - name: Restore state
         uses: actions/cache/restore@v4
         with:
           path: |
-            state_${{ matrix.account.name }}.json
-            history_${{ matrix.account.name }}.json
-          key: state-${{ matrix.account.name }}-${{ github.run_number }}
+            state_cxfan.json
+            history_cxfan.json
+          key: state-cxfan-${{ github.run_number }}
           restore-keys: |
-            state-${{ matrix.account.name }}-
+            state-cxfan-
 
       - name: Run bot
         env:
-          CLUB_EMAIL: ${{ secrets[matrix.account.email_secret] }}
-          CLUB_PASSWORD: ${{ secrets[matrix.account.password_secret] }}
+          CLUB_EMAIL: ${{ secrets.CLUB_EMAIL_CXFAN }}
+          CLUB_PASSWORD: ${{ secrets.CLUB_PASSWORD_CXFAN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          ACCOUNT_NAME: ${{ matrix.account.name }}
+          ACCOUNT_NAME: cxfan
         run: node bot.js
 
-      # Save state so next run knows warmup phase, commented posts, etc.
       - name: Save state
         if: always()
         uses: actions/cache/save@v4
         with:
           path: |
-            state_${{ matrix.account.name }}.json
-            history_${{ matrix.account.name }}.json
-          key: state-${{ matrix.account.name }}-${{ github.run_number }}
+            state_cxfan.json
+            history_cxfan.json
+          key: state-cxfan-${{ github.run_number }}
 
       - name: Upload error screenshot if failed
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: error-${{ matrix.account.name }}-${{ github.run_id }}
+          name: error-${{ github.run_id }}
           path: error.png
