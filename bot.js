@@ -204,6 +204,46 @@ async function generateComment(post, imageB64 = null) {
   } catch (e) { console.error("[groq] comment error:", e.message); return null; }
 }
 
+const VERIFY_PROMPT = `You are a strict fact-checker reviewing a comment before it gets posted on Club.com.
+
+You will receive:
+- The post caption (context)
+- The comment that was generated
+
+Your job: decide if this comment should stay or be deleted.
+
+DELETE if ANY of these are true:
+- The comment references a fact, detail, or assumption about the post that isn't supported by the caption
+- The comment could embarrass a real person if it's factually wrong (e.g., wrong info about an event, place, person)
+- The comment sounds like it was written by an AI (generic, hollow, no real substance)
+- The comment uses any banned words: "w", "L", "facts", "based", "ngl", "bro", "fire", "fair enough", "lowkey", "literally", "great content", "amazing"
+- The comment is a single word or meaningless fragment
+
+KEEP if:
+- The comment reacts to something clearly stated in the caption
+- OR makes a universally true observation (not event-specific) that fits the post
+- AND sounds like something a real 23yo would type fast
+
+Reply with exactly one word: KEEP or DELETE. Nothing else.`;
+
+async function verifyComment(caption, comment) {
+  if (!GROQ_KEY) return true; // no key = trust it
+  const client = new Groq({ apiKey: GROQ_KEY });
+  const ctx = [
+    caption ? `Post caption: "${caption.substring(0, 300)}"` : "Post caption: (none)",
+    `Comment to review: "${comment}"`,
+  ].join("\n");
+  try {
+    const msg = await client.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      max_tokens: 5,
+      messages: [{ role: "system", content: VERIFY_PROMPT }, { role: "user", content: ctx }],
+    });
+    const verdict = msg.choices[0].message.content.trim().toUpperCase();
+    return verdict.startsWith("KEEP");
+  } catch (e) { console.error("[groq] verify error:", e.message); return true; }
+}
+
 async function generateReply(postCaption, originalComment, theirReply, theirUsername) {
   if (!GROQ_KEY) return null;
   const client = new Groq({ apiKey: GROQ_KEY });
@@ -441,19 +481,33 @@ async function runSession(page, state, history) {
       const comment = await generateComment(post, imageB64);
       if (!comment) { console.log(`[session] nothing to say on @${creator.username}`); continue; }
 
+      // Post it
       const res = await api(page, "POST", `/api/feed/${post.id}/comments`, { text: comment });
-      if (res && !res._error) {
-        state.commented.push(post.id);
-        if (state.commented.length > 2000) state.commented = state.commented.slice(-1500);
-        commented++;
-        logComment(history, {
-          postId: post.id,
-          commentId: res.id || res.data?.id,
-          creator: creator.username,
-          comment,
-          caption: (post.caption || "").substring(0, 100),
-        });
-        console.log(`[session] commented on @${creator.username}: "${comment}"`);
+      if (!res || res._error) { console.log(`[session] post failed on @${creator.username}`); continue; }
+
+      const commentId = res.id || res.data?.id;
+
+      // Self-verify: re-read comment in context, delete if wrong
+      console.log(`[session] verifying: "${comment}"`);
+      const approved = await verifyComment(post.caption || "", comment);
+      if (!approved) {
+        console.log(`[session] ❌ verification failed — deleting comment on @${creator.username}`);
+        await api(page, "DELETE", `/api/feed/${post.id}/comments/${commentId}`, null);
+        await sleep(rand(3000, 7000));
+        continue; // try next post
+      }
+
+      console.log(`[session] ✅ verified — keeping comment on @${creator.username}: "${comment}"`);
+      state.commented.push(post.id);
+      if (state.commented.length > 2000) state.commented = state.commented.slice(-1500);
+      commented++;
+      logComment(history, {
+        postId: post.id,
+        commentId,
+        creator: creator.username,
+        comment,
+        caption: (post.caption || "").substring(0, 100),
+      });
 
         // Sometimes like too
         if (Math.random() < 0.55) {
