@@ -9,7 +9,7 @@
 const puppeteer  = require("puppeteer-extra");
 const Stealth    = require("puppeteer-extra-plugin-stealth");
 const AnonUA     = require("puppeteer-extra-plugin-anonymize-ua");
-const Anthropic  = require("@anthropic-ai/sdk");
+const Groq       = require("groq-sdk");
 const fs         = require("fs");
 const path       = require("path");
 const persona    = require("./persona");
@@ -21,7 +21,7 @@ puppeteer.use(AnonUA({ makeWindows: true }));
 // ─── Config ─────────────────────────────────────────────────────────────────
 const EMAIL        = process.env.CLUB_EMAIL;
 const PASSWORD     = process.env.CLUB_PASSWORD;
-const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+const GROQ_KEY = process.env.GROQ_API_KEY;
 const ACCOUNT_NAME = "cxfan";
 const BASE         = "https://club.com";
 const STATE_FILE   = path.join(process.cwd(), "state_cxfan.json");
@@ -186,22 +186,26 @@ HOW TO REPLY (if you do):
 Return your reply text only, or empty string if not worth responding.`;
 
 async function generateComment(post, imageB64 = null) {
-  if (!ANTHROPIC_KEY) return null;
-  const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
+  if (!GROQ_KEY) return null;
+  const client = new Groq({ apiKey: GROQ_KEY });
   const caption = (post.caption || "").trim().substring(0, 400);
-  const content = [];
-  if (imageB64) content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: imageB64 } });
-  content.push({ type: "text", text: caption ? `Post caption: "${caption}"\n\nWrite your comment (or empty string to skip):` : `Post type: ${post.contentType || "media"}, no caption.\n\nWrite your comment (or empty string to skip):` });
+  const userMsg = caption
+    ? `Post caption: "${caption}"\n\nWrite your comment (or empty string to skip):`
+    : `Post type: ${post.contentType || "media"}, no caption.\n\nWrite your comment (or empty string to skip):`;
   try {
-    const msg = await client.messages.create({ model: "claude-haiku-4-5", max_tokens: 80, system: COMMENT_PROMPT, messages: [{ role: "user", content }] });
-    const text = msg.content[0].text.trim().replace(/^["']|["']$/g, "");
+    const msg = await client.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      max_tokens: 80,
+      messages: [{ role: "system", content: COMMENT_PROMPT }, { role: "user", content: userMsg }],
+    });
+    const text = msg.choices[0].message.content.trim().replace(/^["']|["']$/g, "");
     return text.length < 3 ? null : text;
-  } catch (e) { console.error("[claude] comment error:", e.message); return null; }
+  } catch (e) { console.error("[groq] comment error:", e.message); return null; }
 }
 
 async function generateReply(postCaption, originalComment, theirReply, theirUsername) {
-  if (!ANTHROPIC_KEY) return null;
-  const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
+  if (!GROQ_KEY) return null;
+  const client = new Groq({ apiKey: GROQ_KEY });
 
   const context = [
     postCaption ? `Post context: "${postCaption.substring(0, 300)}"` : "Post context: (no caption — media post)",
@@ -212,15 +216,14 @@ async function generateReply(postCaption, originalComment, theirReply, theirUser
   ].join("\n");
 
   try {
-    const msg = await client.messages.create({
-      model: "claude-haiku-4-5",
+    const msg = await client.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
       max_tokens: 80,
-      system: REPLY_PROMPT,
-      messages: [{ role: "user", content: context }],
+      messages: [{ role: "system", content: REPLY_PROMPT }, { role: "user", content: context }],
     });
-    const text = msg.content[0].text.trim().replace(/^["']|["']$/g, "");
+    const text = msg.choices[0].message.content.trim().replace(/^["']|["']$/g, "");
     return text.length < 3 ? null : text;
-  } catch (e) { console.error("[claude] reply error:", e.message); return null; }
+  } catch (e) { console.error("[groq] reply error:", e.message); return null; }
 }
 
 async function fetchImageB64(page, url) {
