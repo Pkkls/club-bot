@@ -2,7 +2,8 @@ name: Club Bot
 
 on:
   schedule:
-    - cron: "17 8,14,19,22 * * *"
+    # Runs every 2h — bot decides internally based on Tyler's schedule whether to actually post
+    - cron: "0 */2 * * *"
   workflow_dispatch:
 
 jobs:
@@ -39,7 +40,8 @@ jobs:
           CLUB_EMAIL: ${{ secrets.CLUB_EMAIL_CXFAN }}
           CLUB_PASSWORD: ${{ secrets.CLUB_PASSWORD_CXFAN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          ACCOUNT_NAME: cxfan
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node bot.js
 
       - name: Save state
