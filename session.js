@@ -97,7 +97,18 @@ async function ensureLoggedIn(page, EMAIL, PASSWORD) {
   // Try restoring existing session
   const restored = await restoreSession(page);
   if (restored) {
+    // Log token BEFORE navigation
+    const before = await page.cookies();
+    const tokBefore = before.find(c => c.name === "chatAuthToken");
+    console.log(`[session] chatAuthToken before goto: ${tokBefore?.value?.slice(0,20) || "MISSING"}`);
+
     await page.goto(BASE, { waitUntil: "networkidle2", timeout: 30000 });
+
+    // Log token AFTER navigation
+    const after = await page.cookies();
+    const tokAfter = after.find(c => c.name === "chatAuthToken");
+    console.log(`[session] chatAuthToken after goto:  ${tokAfter?.value?.slice(0,20) || "MISSING"}`);
+
     const ok = await checkLoggedIn(page);
     if (ok) {
       console.log("[session] restored from cookies ✅");
