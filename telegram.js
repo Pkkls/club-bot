@@ -45,24 +45,18 @@ function formatDigest(history) {
   let msg = `📊 <b>cxfan — Daily Report</b>\n${today}\n\n`;
 
   if (todayComments.length > 0) {
-    msg += `💬 <b>${todayComments.length} comment${todayComments.length > 1 ? "s" : ""}</b>\n`;
-    msg += `<pre>`;
-    msg += `Creator       | Comment\n`;
-    msg += `${"─".repeat(60)}\n`;
+    msg += `💬 <b>${todayComments.length} comment${todayComments.length > 1 ? "s" : ""}</b>\n\n`;
     for (const c of todayComments) {
-      const creator = `@${c.creator}`.padEnd(14);
-      const comment = c.comment.length > 60 ? c.comment.slice(0, 57) + "..." : c.comment;
-      msg += `${creator}| "${comment}"\n`;
-      if (c.caption) {
-        const ctx = c.caption.length > 55 ? c.caption.slice(0, 52) + "..." : c.caption;
-        msg += `              | ↳ post: "${ctx}"\n`;
-      }
-      if (c.isReply) {
-        msg += `              | ↳ reply to: "${(c.replyingTo || "").slice(0, 40)}"\n`;
-      }
+      const postUrl = c.postId ? `https://club.com/${c.creator}/post/${c.postId}` : null;
+      const label = c.isReply ? `↩ reply to @${c.replyingToUser || c.creator}` : `@${c.creator}`;
+      msg += `${c.isReply ? "↩️" : "💬"} <b>${label}</b>`;
+      if (postUrl) msg += ` — <a href="${postUrl}">view post</a>`;
+      msg += `\n`;
+      msg += `"${c.comment}"\n`;
+      if (c.caption) msg += `<i>post: "${c.caption.slice(0, 80)}${c.caption.length > 80 ? "..." : ""}"</i>\n`;
+      if (c.isReply && c.replyingTo) msg += `<i>they said: "${c.replyingTo.slice(0, 60)}..."</i>\n`;
       msg += `\n`;
     }
-    msg += `</pre>`;
   }
 
   if (todayFollows.length > 0) {
