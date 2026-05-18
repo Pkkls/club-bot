@@ -2,23 +2,24 @@ name: Club Bot
 
 on:
   schedule:
-    # 4 runs/day: 8h, 13h, 18h, 21h UTC (ajuste selon ton timezone)
-    - cron: "0 8,13,18,21 * * *"
+    # 4x/day at random-ish hours (not on the hour = less bot-like)
+    - cron: "17 8,14,19,22 * * *"
   workflow_dispatch:
     inputs:
       account:
-        description: "Account name (default=cxfan)"
+        description: "Account name"
         default: "cxfan"
 
 jobs:
   run-bot:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Use self-hosted runner (your PC = residential IP) if available,
+    # otherwise fall back to GitHub's ubuntu (datacenter IP — higher detection risk)
+    runs-on: ${{ vars.USE_SELF_HOSTED == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    timeout-minutes: 20
 
     strategy:
       fail-fast: false
       matrix:
-        # Ajoute des comptes ici quand tu en as plus
         account:
           - name: cxfan
             email_secret: CLUB_EMAIL_CXFAN
@@ -38,6 +39,17 @@ jobs:
       - name: Install Puppeteer browser
         run: npx puppeteer browsers install chrome
 
+      # Restore persisted state from previous run (warmup progress, commented IDs, etc.)
+      - name: Restore state
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            state_${{ matrix.account.name }}.json
+            history_${{ matrix.account.name }}.json
+          key: state-${{ matrix.account.name }}-${{ github.run_number }}
+          restore-keys: |
+            state-${{ matrix.account.name }}-
+
       - name: Run bot
         env:
           CLUB_EMAIL: ${{ secrets[matrix.account.email_secret] }}
@@ -46,9 +58,19 @@ jobs:
           ACCOUNT_NAME: ${{ matrix.account.name }}
         run: node bot.js
 
+      # Save state so next run knows warmup phase, commented posts, etc.
+      - name: Save state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            state_${{ matrix.account.name }}.json
+            history_${{ matrix.account.name }}.json
+          key: state-${{ matrix.account.name }}-${{ github.run_number }}
+
       - name: Upload error screenshot if failed
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: error-${{ matrix.account.name }}
+          name: error-${{ matrix.account.name }}-${{ github.run_id }}
           path: error.png
