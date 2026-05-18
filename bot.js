@@ -386,9 +386,9 @@ async function checkAndHandleReplies(state, history) {
 
 // ─── Main session ─────────────────────────────────────────────────────────────
 async function runSession(state, history) {
-  // 1. Check Tyler's activity window
+  // 1. Check Tyler's activity window (FORCE_SESSION=true bypasses for testing)
   const activityProb = persona.getActivityProbability();
-  if (Math.random() > activityProb) {
+  if (!process.env.FORCE_SESSION && Math.random() > activityProb) {
     console.log(`[session] Tyler is not active right now (p=${activityProb.toFixed(2)}) — skipping`);
     return;
   }

@@ -47,16 +47,6 @@ jobs:
         env:
           COOKIES_B64: ${{ secrets.COOKIES_CXFAN_B64 }}
 
-      - name: Test auth via curl
-        run: |
-          echo "--- Testing chatAuthToken directly ---"
-          curl -s -o /dev/null -w "HTTP %{http_code}" \
-            -H "Cookie: chatAuthToken=$TOKEN" \
-            "https://club.com/api/feed?type=hot&limit=1"
-          echo ""
-        env:
-          TOKEN: ${{ secrets.CHATAUTH_TOKEN }}
-
       - name: Run bot
         env:
           CLUB_EMAIL: ${{ secrets.CLUB_EMAIL_CXFAN }}
