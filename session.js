@@ -30,6 +30,10 @@ async function restoreSession(page) {
 
 async function checkLoggedIn(page) {
   try {
+    // Debug: log what cookies Puppeteer actually has
+    const cookies = await page.cookies();
+    console.log(`[session] cookies in page: ${cookies.map(c => c.name).join(", ") || "(none)"}`);
+
     const result = await page.evaluate(async (base) => {
       try {
         const r = await fetch(base + "/api/feed?type=hot&limit=1", { credentials: "include" });
