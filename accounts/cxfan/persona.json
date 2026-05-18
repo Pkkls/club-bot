@@ -1,0 +1,13 @@
+{
+  "username": "cxfan",
+  "email": "zezegerb@gmail.com",
+  "age": 23,
+  "location": "US",
+  "niche": "gaming/streaming CX",
+  "style": "casual, fast typer, CX community member",
+  "targets": ["bijan", "henrik", "eddie", "sjc", "kangjoelll", "iceposeidon"],
+  "comment_style": "short, lowercase ok, no hype, react to content",
+  "active_hours": {"start": 8, "end": 23},
+  "posts_per_session": 1,
+  "session_frequency_hours": 6
+}

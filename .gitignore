@@ -1,0 +1,10 @@
+auth.json
+cookies.json
+accounts/*/session.json
+anthropic_key.txt
+*.log
+logs/
+.venv/
+__pycache__/
+debug_*.png
+tmp_cookies/
