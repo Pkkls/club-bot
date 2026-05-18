@@ -35,7 +35,7 @@ async function checkLoggedIn() {
     const req = require("https").request(
       {
         hostname: "club.com",
-        path: "/api/feed?type=hot&limit=1",
+        path: "/api/auth/me",
         method: "GET",
         headers: {
           "Cookie": `chatAuthToken=${token}`,
@@ -44,9 +44,18 @@ async function checkLoggedIn() {
         },
       },
       (res) => {
-        console.log(`[session] auth check → HTTP ${res.statusCode}`);
-        res.resume();
-        resolve(res.statusCode < 400);
+        let data = "";
+        res.on("data", d => data += d);
+        res.on("end", () => {
+          const ok = res.statusCode === 200;
+          try {
+            const j = JSON.parse(data);
+            console.log(`[session] auth check → HTTP ${res.statusCode} | user: ${j.id?.slice(0,8) || "?"}`);
+          } catch {
+            console.log(`[session] auth check → HTTP ${res.statusCode}`);
+          }
+          resolve(ok);
+        });
       }
     );
     req.on("error", () => resolve(false));

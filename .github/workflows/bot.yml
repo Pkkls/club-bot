@@ -40,10 +40,9 @@ jobs:
           restore-keys: |
             state-cxfan-
 
-      - name: Seed cookies from secret (if cache miss)
-        if: ${{ vars.COOKIES_SEEDED != 'true' }}
+      - name: Seed cookies from secret
         run: |
-          if [ ! -f cookies_cxfan.json ] && [ -n "$COOKIES_B64" ]; then
+          if [ -n "$COOKIES_B64" ]; then
             echo "$COOKIES_B64" | base64 -d > cookies_cxfan.json
             echo "Cookies seeded from secret."
           fi
