@@ -32,6 +32,7 @@ jobs:
           path: |
             state_cxfan.json
             history_cxfan.json
+            cookies_cxfan.json
           key: state-cxfan-${{ github.run_number }}
           restore-keys: |
             state-cxfan-
@@ -53,6 +54,7 @@ jobs:
           path: |
             state_cxfan.json
             history_cxfan.json
+            cookies_cxfan.json
           key: state-cxfan-${{ github.run_number }}
 
       - name: Upload error screenshot if failed

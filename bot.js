@@ -14,6 +14,9 @@ const fs         = require("fs");
 const path       = require("path");
 const persona    = require("./persona");
 const { sendDailyDigest, sendMessage, checkCommands } = require("./telegram");
+const { ensureLoggedIn }                        = require("./session");
+const { trackCreator, recordInteraction, prioritize, getTrending } = require("./creators");
+const { checkCommentMetrics }                   = require("./metrics");
 
 puppeteer.use(Stealth());
 puppeteer.use(AnonUA({ makeWindows: true }));
@@ -359,41 +362,7 @@ async function checkAndHandleReplies(page, state, history) {
 }
 
 // ─── Login ────────────────────────────────────────────────────────────────────
-async function login(page) {
-  console.log("[login] navigating...");
-  await page.goto(BASE, { waitUntil: "networkidle2", timeout: 45000 });
-  await sleep(rand(2000, 3500));
-
-  const me = await api(page, "GET", "/api/users/me", null);
-  if (me && !me._error) { console.log(`[login] already logged in`); return; }
-
-  try { await page.click('button::-p-text(Log in or sign up)'); } catch {
-    const btns = await page.$$("button");
-    for (const b of btns) { const t = await page.evaluate(el=>el.textContent,b); if (t?.includes("Log in")) { await b.click(); break; } }
-  }
-  await sleep(rand(1500, 3000));
-
-  // Google button (~594,317 in 1280x720 → scale to 1920x1080)
-  await page.mouse.click(Math.floor(594 * 1920/1280), Math.floor(317 * 1080/720));
-  await sleep(rand(2500, 4000));
-
-  await page.waitForSelector('input[type="email"]', { timeout: 15000 });
-  await sleep(rand(600, 1200));
-  for (const c of EMAIL) { await page.keyboard.type(c, { delay: rand(45, 120) }); if (Math.random()<.04) await sleep(rand(200,500)); }
-  await sleep(rand(400, 800));
-  await page.keyboard.press("Enter");
-  await sleep(rand(2500, 4500));
-
-  await page.waitForSelector('input[type="password"]', { timeout: 15000 });
-  await sleep(rand(500, 1000));
-  for (const c of PASSWORD) { await page.keyboard.type(c, { delay: rand(45, 120) }); }
-  await sleep(rand(300, 700));
-  await page.keyboard.press("Enter");
-
-  await page.waitForURL("https://club.com/**", { timeout: 35000 });
-  await sleep(rand(2000, 3500));
-  console.log("[login] done");
-}
+// Login handled by session.js (cookie-based, Google OAuth only when expired)
 
 // ─── Main session ─────────────────────────────────────────────────────────────
 async function runSession(page, state, history) {
@@ -435,12 +404,20 @@ async function runSession(page, state, history) {
     } catch {}
   }
 
+  // Track all discovered creators in the network
+  for (const p of seen.values()) {
+    const c = p._creator;
+    if (c?.username) trackCreator(state, c);
+  }
+
   // Sort by engagement — but 20% of the time pick randomly (amélioration #3)
   const allPosts = [...seen.values()].map(p => ({ ...p, _score: scorePost(p) }));
   const useRandom = Math.random() < 0.2;
-  const candidates = useRandom
+  const sorted = useRandom
     ? allPosts.sort(() => Math.random() - 0.5)
     : allPosts.sort((a, b) => b._score - a._score).slice(0, 30).sort(() => Math.random() - 0.5);
+  // Boost trending/favorites creators (creators.js prioritize)
+  const candidates = prioritize(sorted, state);
 
   console.log(`[session] post selection: ${useRandom ? "random" : "top engagement"}`);
 
@@ -456,7 +433,7 @@ async function runSession(page, state, history) {
     const r = await api(page, "POST", `/api/feed/${post.id}/likes`, {});
     if (r && !r._error) {
       state.liked.push(post.id);
-      if (state.liked.length > 2000) state.liked = state.liked.slice(-1500);
+      if (state.liked.length > 500) state.liked = state.liked.slice(-400);
       liked++;
     }
   }
@@ -472,12 +449,17 @@ async function runSession(page, state, history) {
     console.log(`\n[session] → @${creator.username}`);
 
     try {
-      // Pre-filter: skip posts with unexplained proper nouns/events (amélioration #2)
+      // Pre-filter: skip posts with not enough readable content
       const caption = post.caption || "";
-      const hasUnexplainedContext = /\b([A-Z][a-z]+(?:\s[A-Z][a-z]+)+)\b/.test(caption) && caption.length < 60;
-      const hashtagOnly = caption.replace(/#\w+/g, "").replace(/\s/g, "").length < 15;
-      if (hashtagOnly) {
-        console.log(`[session] skipping @${creator.username} — caption is hashtag-only`);
+      const usefulText = caption
+        .replace(/\[emote:[^\]]+\]/g, "")  // strip emote tags
+        .replace(/#\w+/g, "")              // strip hashtags
+        .replace(/@\w+/g, "")             // strip mentions
+        .replace(/https?:\/\/\S+/g, "")   // strip URLs
+        .replace(/[^\w\s]/g, " ")         // strip punctuation/emoji
+        .trim();
+      if (usefulText.length < 25) {
+        console.log(`[session] skipping @${creator.username} — not enough context`);
         continue;
       }
 
@@ -495,6 +477,7 @@ async function runSession(page, state, history) {
         if (r && !r._error) {
           state.followed.push(creator.username);
           logFollow(history, creator.username);
+          recordInteraction(state, creator.username);
           console.log(`[session] followed @${creator.username}`);
           await sleep(rand(2000, 5000));
         }
@@ -530,6 +513,7 @@ async function runSession(page, state, history) {
       state.commented.push(post.id);
       if (state.commented.length > 2000) state.commented = state.commented.slice(-1500);
       commented++;
+      recordInteraction(state, creator.username);
       logComment(history, {
         postId: post.id,
         commentId,
@@ -558,10 +542,12 @@ async function runSession(page, state, history) {
 }
 
 // ─── Telegram digest trigger ──────────────────────────────────────────────────
-function shouldSendDigest() {
-  // Send digest around 9pm ET (21h ET = 01h-02h UTC depending on DST)
+function shouldSendDigest(state) {
+  // Send digest around 9pm ET, at most once every 48h
   const h = persona.getEasternHour();
-  return h >= 21 && h <= 22;
+  if (h < 21 || h > 22) return false;
+  const last = state.lastDigestSent || 0;
+  return (Date.now() - last) >= 48 * 3600000;
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -591,12 +577,19 @@ async function main() {
     // Check Telegram commands (/history) before doing anything else
     await checkCommands(history);
 
-    await login(page);
+    await ensureLoggedIn(page, EMAIL, PASSWORD);
+
+    // 72h metrics check (runs quickly, no extra navigation)
+    await checkCommentMetrics(page, history);
+
     await runSession(page, state, history);
     saveState(state);
 
-    if (shouldSendDigest()) {
-      await sendDailyDigest(history);
+    if (shouldSendDigest(state)) {
+      const trending = getTrending(state);
+      await sendDailyDigest(history, trending);
+      state.lastDigestSent = Date.now();
+      saveState(state);
     }
   } catch (e) {
     console.error("[fatal]", e.message);

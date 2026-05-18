@@ -70,8 +70,26 @@ function formatDigest(history) {
   return msg;
 }
 
-async function sendDailyDigest(history) {
-  const msg = formatDigest(history);
+async function sendDailyDigest(history, trending = []) {
+  let msg = formatDigest(history);
+
+  // Append 72h metrics for comments that have been checked
+  const withMetrics = history.comments.filter(c => c.checked && (c.likesReceived > 0 || c.repliesReceived > 0));
+  if (withMetrics.length > 0) {
+    msg += `\n\n📊 <b>72h engagement</b>\n`;
+    for (const c of withMetrics.slice(-5)) {
+      msg += `@${c.creator}: ${c.likesReceived || 0} likes · ${c.repliesReceived || 0} replies\n`;
+    }
+  }
+
+  // Append trending creators
+  if (trending.length > 0) {
+    msg += `\n\n🔥 <b>Trending creators</b>\n`;
+    for (const t of trending) {
+      msg += `@${t.username} +${t.growthRate}% followers (7d)\n`;
+    }
+  }
+
   try {
     await sendMessage(msg);
     console.log("[telegram] Daily digest sent.");
