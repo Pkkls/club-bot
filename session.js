@@ -34,13 +34,15 @@ async function checkLoggedIn(page) {
     const cookies = await page.cookies();
     console.log(`[session] cookies in page: ${cookies.map(c => c.name).join(", ") || "(none)"}`);
 
-    const result = await page.evaluate(async (base) => {
+    const { status, body } = await page.evaluate(async (base) => {
       try {
         const r = await fetch(base + "/api/feed?type=hot&limit=1", { credentials: "include" });
-        return r.status;
-      } catch { return 0; }
+        const body = await r.text().catch(() => "");
+        return { status: r.status, body: body.slice(0, 200) };
+      } catch (e) { return { status: 0, body: e.message }; }
     }, BASE);
-    console.log(`[session] auth check → HTTP ${result}`);
+    console.log(`[session] auth check → HTTP ${status} | ${body}`);
+    const result = status;
     return result === 200;
   } catch { return false; }
 }
