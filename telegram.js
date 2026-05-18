@@ -80,4 +80,53 @@ async function sendDailyDigest(history) {
   }
 }
 
-module.exports = { sendDailyDigest, sendMessage };
+function formatHistory(history) {
+  const comments = history.comments.filter(c => !c.isReply).slice(-20).reverse();
+  if (!comments.length) return "📜 <b>Historique</b>\n\nAucun commentaire pour l'instant.";
+  let msg = `📜 <b>Historique — ${comments.length} derniers commentaires</b>\n\n`;
+  for (const c of comments) {
+    const url = `https://club.com/${c.creator}/post/${c.postId}`;
+    msg += `<b>${c.ts.slice(0,10)}</b> · <a href="${url}">@${c.creator}</a>\n"${c.comment}"\n\n`;
+  }
+  msg += `📈 Total: ${history.comments.length} commentaires · ${history.follows.length} follows`;
+  return msg;
+}
+
+async function checkCommands(history) {
+  if (!TOKEN || !CHAT_ID) return;
+  try {
+    const updates = await new Promise((resolve, reject) => {
+      const req = https.request({
+        hostname: "api.telegram.org",
+        path: `/bot${TOKEN}/getUpdates?timeout=3&allowed_updates=["message"]`,
+        method: "GET",
+      }, res => { let d = ""; res.on("data", c => d += c); res.on("end", () => resolve(JSON.parse(d))); });
+      req.on("error", reject);
+      req.end();
+    });
+
+    if (!updates.ok || !updates.result.length) return;
+    let lastId = 0;
+
+    for (const u of updates.result) {
+      lastId = Math.max(lastId, u.update_id);
+      const msg = u.message;
+      if (!msg || String(msg.chat.id) !== String(CHAT_ID)) continue;
+      if (msg.text === "/history") {
+        await sendMessage(formatHistory(history));
+        console.log("[telegram] /history sent.");
+      }
+    }
+
+    // Acknowledge updates
+    if (lastId > 0) {
+      await new Promise((resolve) => {
+        const req = https.request({ hostname: "api.telegram.org", path: `/bot${TOKEN}/getUpdates?offset=${lastId+1}&limit=1`, method: "GET" }, res => { res.on("data", ()=>{}); res.on("end", resolve); });
+        req.on("error", resolve);
+        req.end();
+      });
+    }
+  } catch (e) { console.error("[telegram] checkCommands error:", e.message); }
+}
+
+module.exports = { sendDailyDigest, sendMessage, checkCommands };

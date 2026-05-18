@@ -13,7 +13,7 @@ const Groq       = require("groq-sdk");
 const fs         = require("fs");
 const path       = require("path");
 const persona    = require("./persona");
-const { sendDailyDigest, sendMessage } = require("./telegram");
+const { sendDailyDigest, sendMessage, checkCommands } = require("./telegram");
 
 puppeteer.use(Stealth());
 puppeteer.use(AnonUA({ makeWindows: true }));
@@ -435,12 +435,32 @@ async function runSession(page, state, history) {
     } catch {}
   }
 
-  // Sort by engagement score, pick from top candidates
-  const candidates = [...seen.values()]
-    .map(p => ({ ...p, _score: scorePost(p) }))
-    .sort((a, b) => b._score - a._score)
-    .slice(0, 30)
-    .sort(() => Math.random() - 0.5); // shuffle top 30 for variety
+  // Sort by engagement — but 20% of the time pick randomly (amélioration #3)
+  const allPosts = [...seen.values()].map(p => ({ ...p, _score: scorePost(p) }));
+  const useRandom = Math.random() < 0.2;
+  const candidates = useRandom
+    ? allPosts.sort(() => Math.random() - 0.5)
+    : allPosts.sort((a, b) => b._score - a._score).slice(0, 30).sort(() => Math.random() - 0.5);
+
+  console.log(`[session] post selection: ${useRandom ? "random" : "top engagement"}`);
+
+  // Silent likes session — Tyler likes 3-8 posts without commenting (amélioration #1)
+  const likeCandidates = allPosts.filter(p => !state.liked?.includes(p.id)).slice(0, 15);
+  const likeCount = rand(3, 8);
+  let liked = 0;
+  if (!state.liked) state.liked = [];
+
+  for (const post of likeCandidates.sort(() => Math.random() - 0.5)) {
+    if (liked >= likeCount) break;
+    await sleep(rand(2000, 6000));
+    const r = await api(page, "POST", `/api/feed/${post.id}/likes`, {});
+    if (r && !r._error) {
+      state.liked.push(post.id);
+      if (state.liked.length > 2000) state.liked = state.liked.slice(-1500);
+      liked++;
+    }
+  }
+  console.log(`[session] silently liked ${liked} posts`);
 
   let commented = 0;
 
@@ -452,6 +472,15 @@ async function runSession(page, state, history) {
     console.log(`\n[session] → @${creator.username}`);
 
     try {
+      // Pre-filter: skip posts with unexplained proper nouns/events (amélioration #2)
+      const caption = post.caption || "";
+      const hasUnexplainedContext = /\b([A-Z][a-z]+(?:\s[A-Z][a-z]+)+)\b/.test(caption) && caption.length < 60;
+      const hashtagOnly = caption.replace(/#\w+/g, "").replace(/\s/g, "").length < 15;
+      if (hashtagOnly) {
+        console.log(`[session] skipping @${creator.username} — caption is hashtag-only`);
+        continue;
+      }
+
       // Visit profile
       if (!state.visited.includes(creator.username)) {
         await api(page, "POST", "/api/users/me/profile-visits", { creatorId: creator.id });
@@ -489,15 +518,15 @@ async function runSession(page, state, history) {
 
       // Self-verify: re-read comment in context, delete if wrong
       console.log(`[session] verifying: "${comment}"`);
-      const approved = await verifyComment(post.caption || "", comment);
+      const approved = await verifyComment(caption, comment);
       if (!approved) {
-        console.log(`[session] ❌ verification failed — deleting comment on @${creator.username}`);
+        console.log(`[session] ❌ verification failed — deleting and trying next post`);
         await api(page, "DELETE", `/api/feed/${post.id}/comments/${commentId}`, null);
         await sleep(rand(3000, 7000));
-        continue; // try next post
+        continue;
       }
 
-      console.log(`[session] ✅ verified — keeping comment on @${creator.username}: "${comment}"`);
+      console.log(`[session] ✅ verified — keeping: "${comment}"`);
       state.commented.push(post.id);
       if (state.commented.length > 2000) state.commented = state.commented.slice(-1500);
       commented++;
@@ -506,17 +535,16 @@ async function runSession(page, state, history) {
         commentId,
         creator: creator.username,
         comment,
-        caption: (post.caption || "").substring(0, 100),
+        caption: caption.substring(0, 100),
       });
 
-        // Sometimes like too
-        if (Math.random() < 0.55) {
-          await sleep(rand(1500, 4000));
-          await api(page, "POST", `/api/feed/${post.id}/likes`, {});
-        }
-
-        await sleep(rand(15000, 35000)); // Tyler reads other comments after posting
+      // Like after commenting — with human delay (amélioration #5 partiel)
+      if (Math.random() < 0.55) {
+        await sleep(rand(30000, 90000)); // Tyler reads other comments first
+        await api(page, "POST", `/api/feed/${post.id}/likes`, {});
       }
+
+      await sleep(rand(15000, 35000));
     } catch (e) {
       console.error(`[session] error on @${creator.username}:`, e.message);
     }
@@ -560,11 +588,13 @@ async function main() {
   const page = await initPage(browser, fp);
 
   try {
+    // Check Telegram commands (/history) before doing anything else
+    await checkCommands(history);
+
     await login(page);
     await runSession(page, state, history);
     saveState(state);
 
-    // Send Telegram digest once per day in the evening
     if (shouldSendDigest()) {
       await sendDailyDigest(history);
     }
