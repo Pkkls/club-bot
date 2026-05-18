@@ -58,9 +58,8 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: 6901526627
-        run: node bot.js
-        env:
           FORCE_SESSION: ${{ github.event.inputs.force_session }}
+        run: node bot.js
 
       - name: Save state
         if: always()
