@@ -48,9 +48,9 @@ function formatDigest(history) {
     msg += `💬 <b>${todayComments.length} comment${todayComments.length > 1 ? "s" : ""}</b>\n\n`;
     for (const c of todayComments) {
       const postUrl = c.postId ? `https://club.com/${c.creator}/post/${c.postId}` : null;
-      const label = c.isReply ? `↩ reply to @${c.replyingToUser || c.creator}` : `@${c.creator}`;
+      const creatorLink = postUrl ? `<a href="${postUrl}">@${c.creator}</a>` : `@${c.creator}`;
+      const label = c.isReply ? `↩ reply to ${creatorLink}` : creatorLink;
       msg += `${c.isReply ? "↩️" : "💬"} <b>${label}</b>`;
-      if (postUrl) msg += ` — <a href="${postUrl}">view post</a>`;
       msg += `\n`;
       msg += `"${c.comment}"\n`;
       if (c.caption) msg += `<i>post: "${c.caption.slice(0, 80)}${c.caption.length > 80 ? "..." : ""}"</i>\n`;
