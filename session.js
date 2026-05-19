@@ -29,8 +29,10 @@ async function restoreSession(page) {
 }
 
 async function checkLoggedIn() {
-  const token = loadCookies()?.find(c => c.name === "chatAuthToken")?.value;
+  const cookies = loadCookies();
+  const token = cookies?.find(c => c.name === "chatAuthToken")?.value;
   if (!token) { console.log("[session] no chatAuthToken found"); return false; }
+  const cookieStr = (cookies || []).map(c => `${c.name}=${c.value}`).join("; ");
   return new Promise((resolve) => {
     const req = require("https").request(
       {
@@ -38,7 +40,7 @@ async function checkLoggedIn() {
         path: "/api/auth/me",
         method: "GET",
         headers: {
-          "Cookie": `chatAuthToken=${token}`,
+          "Cookie": cookieStr,
           "Accept": "application/json",
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         },
@@ -112,42 +114,33 @@ async function login(page, EMAIL, PASSWORD) {
 }
 
 async function ensureLoggedIn(page, EMAIL, PASSWORD) {
-  // Check token directly via HTTPS — no browser needed
   const ok = await checkLoggedIn();
   if (ok) {
     console.log("[session] token valid ✅");
     return;
   }
-  console.log("[session] token invalid, attempting Puppeteer login...");
-  if (!page) {
-    // Spin up a browser just for login
-    const puppeteer = require("puppeteer-extra");
-    const Stealth   = require("puppeteer-extra-plugin-stealth");
-    puppeteer.use(Stealth());
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ["--no-sandbox","--disable-setuid-sandbox","--disable-blink-features=AutomationControlled","--window-size=1920,1080","--lang=en-US"],
-      defaultViewport: { width: 1920, height: 1080 },
-    });
-    const p = await browser.newPage();
-    try {
-      await login(p, EMAIL, PASSWORD);
-    } catch (e) {
-      console.error("[session] login failed:", e.message);
-      console.log("[session] exiting cleanly — update COOKIES_CXFAN_B64 secret.");
-      await browser.close();
-      process.exit(0);
+
+  // Cookies expired — alert via Telegram and exit cleanly.
+  // Re-login requires a real browser (Google OAuth) → must be done manually on PC with do-login.js.
+  console.log("[session] ⚠️ session expired — sending Telegram alert and exiting.");
+  try {
+    const https = require("https");
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    const chatId = process.env.TELEGRAM_CHAT_ID;
+    if (token && chatId) {
+      const text = encodeURIComponent(
+        "⚠️ <b>cxfan — session expirée</b>\n\nLes cookies club.com ne sont plus valides.\n\n" +
+        "Lance <code>node do-login.js</code> sur ton PC, connecte-toi, puis redémarre le bot."
+      );
+      await new Promise(resolve => {
+        https.get(
+          `https://api.telegram.org/bot${token}/sendMessage?chat_id=${chatId}&parse_mode=HTML&text=${text}`,
+          res => { res.resume(); resolve(); }
+        ).on("error", resolve);
+      });
     }
-    await browser.close();
-  } else {
-    try {
-      await login(page, EMAIL, PASSWORD);
-    } catch (e) {
-      console.error("[session] login failed:", e.message);
-      console.log("[session] exiting cleanly — update COOKIES_CXFAN_B64 secret.");
-      process.exit(0);
-    }
-  }
+  } catch {}
+  process.exit(0);
 }
 
 module.exports = { ensureLoggedIn, saveCookies };

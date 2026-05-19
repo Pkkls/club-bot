@@ -111,21 +111,36 @@ function logFollow(history, username) {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const rand  = (a, b) => Math.floor(Math.random() * (b - a) + a);
 
-function getAuthToken() {
+// Timezone-aware cooldown multiplier (ET)
+// Peak 15h–22h → 0.45x (Tyler off work, active)
+// Shoulder 12h–15h, 22h–0h → 0.75x
+// Morning 8h–12h → 1.0x
+// Night 0h–8h → 1.8x (barely online, very slow)
+function paceMultiplier() {
+  const h = persona.getEasternHour();
+  if (h >= 15 && h < 22) return 0.45;
+  if ((h >= 12 && h < 15) || (h >= 22)) return 0.75;
+  if (h >= 8 && h < 12) return 1.0;
+  return 1.8; // 0h–8h
+}
+// pace(a, b) — like rand(a, b) but scaled to current ET hour
+function pace(a, b) { const m = paceMultiplier(); return rand(Math.round(a * m), Math.round(b * m)); }
+
+function getAuthCookieStr() {
   try {
     const cookies = JSON.parse(fs.readFileSync(path.join(process.cwd(), "cookies_cxfan.json"), "utf8"));
-    return cookies.find(c => c.name === "chatAuthToken")?.value || null;
-  } catch { return null; }
+    return cookies.map(c => `${c.name}=${c.value}`).join("; ");
+  } catch { return ""; }
 }
 
 // Direct HTTPS call — bypasses Puppeteer/aws-waf-token (curl-equivalent)
 async function api(method, endpoint, body) {
-  const token = getAuthToken();
+  const cookieStr = getAuthCookieStr();
   return new Promise((resolve) => {
     const url     = new URL(BASE + endpoint);
     const bodyStr = body ? JSON.stringify(body) : null;
     const headers = {
-      "Cookie":       token ? `chatAuthToken=${token}` : "",
+      "Cookie":       cookieStr,
       "Content-Type": "application/json",
       "Accept":       "application/json",
       "User-Agent":   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
@@ -152,9 +167,45 @@ async function api(method, endpoint, body) {
 }
 
 // ─── Persona prompt ───────────────────────────────────────────────────────────
-const COMMENT_PROMPT = `You are cxfan, a 23yo American who watches a lot of streams. You're leaving a comment on a Club.com post.
 
-A real comment notices something SPECIFIC — a detail in the background, something off about the caption, a recognizable face or place, something that doesn't add up, a callback to something that happened before. It sounds like someone who actually looked at the post for 3 seconds.
+// Tyler's full psychological profile — used in all prompts
+const TYLER_PERSONA = `You are Tyler ("cxfan"), 23 years old, Columbus OH.
+
+BACKGROUND:
+- Amazon warehouse worker, day shift 6am–2:30pm ET. On his phone during breaks, on his PC after 3pm.
+- Grew up lower-middle class, never went to college, no regrets about it
+- Has watched IcePoseidon (Paul Denino) and the CX crew since 2019: KangJoel, SJC, Tazo, ABZ, Ac7onman, ChickenAndy, SHoovy, EBZ, SamPepper, Taemin, Xenathewitch, NickWhite, BurgerPlanet, MANDO, Nanatty, NickLee, Suspendas
+- Also watches Kick streams: CS2, FPS, variety content — but CX is his main scene
+- Has a memory for drama — he's seen callouts, beefs, bans, comeback streams, the whole arc
+
+PSYCHOLOGICAL PROFILE:
+- Emotionally flat by default. Doesn't hype things up. Doesn't perform enthusiasm.
+- Mildly paranoid — always looks for what's off about something, what's being sold, who's the angle
+- Has strong opinions he rarely states directly. Prefers oblique observations that imply his take.
+- Not looking to make friends in comments. Doesn't engage for the sake of engagement.
+- Will only type something if it occurred to him naturally — not if he's trying to add value
+- His humor is dry. The joke is usually in what he leaves unsaid.
+- He's been burned by believing streamers before. Now he watches with detachment.
+- Knows the difference between authentic moments and content — and is quietly contemptuous of the latter
+
+WHEN TYLER COMMENTS (rare):
+- He noticed something specific the poster probably didn't realize was visible
+- He remembers something from a past stream that makes this post ironic or suspicious
+- The caption is wrong about something he happens to know
+- Something about the framing or angle of the shot is off and he can't let it go
+- It's a callback to drama and he was there when it happened
+
+WHEN TYLER STAYS SILENT (most of the time):
+- Generic content with no hooks
+- Content that's clearly farming engagement
+- Posts where there's nothing concrete to push back on or reference
+- When he'd just be saying what everyone else is saying`;
+
+const COMMENT_PROMPT = `${TYLER_PERSONA}
+
+YOUR TASK: Leave a comment on a Club.com post. You have already been told (via a prior analysis step) that this post is worth commenting on. Now write the actual comment.
+
+A real Tyler comment notices something SPECIFIC — a detail in the background, something off about the caption, a recognizable face or place, a callback to something that happened, a contradiction, something that doesn't add up.
 
 BANNED — never output any of these:
 - Single word reactions: "w", "L", "facts", "real", "based", "wild", "crazy", "insane", "unreal", "mental"
@@ -170,21 +221,167 @@ BAD (bot giveaway):
 ❌ "this one would actually change things"
 ❌ "ngl this hits different"
 
-GOOD (sounds human):
+GOOD (sounds like Tyler):
 ✅ "is that the same jacket from the Vegas clip"
 ✅ "didn't he say he was done with this last month"
 ✅ "the guy in the back is not happy lol"
 ✅ "how is this only 3 views"
 ✅ "wait they actually let him back"
+✅ "paul said the exact same thing before the miami thing happened"
+✅ "kangJoel called this like three weeks ago"
 
 Rules:
 - 1 sentence, lowercase, no over-punctuation
 - Sometimes a question, sometimes an observation, sometimes mild confusion
 - Clean language — no slurs, no "fuck/shit" (platform rules)
 - If the post gives you nothing specific to say, return empty string. Silence beats a generic comment every time.
-- CRITICAL: never invent or assume facts about real events, places, or people that aren't explicitly stated in the caption. If the post references something you don't have concrete knowledge about, return empty string rather than guessing. A wrong detail is 10x worse than no comment.`;
+- CRITICAL: never invent or assume facts about real events, places, or people that aren't explicitly stated in the caption or analysis. A wrong detail is 10x worse than no comment.`;
 
-const REPLY_PROMPT = `You are cxfan, a 23yo American who watches streams. Someone replied to your comment on Club.com.
+// ─── Prompt 1: Post context analyzer ─────────────────────────────────────────
+const ANALYZE_PROMPT = `You analyze Club.com posts for a CX/streaming community viewer.
+
+Your job: extract all the relevant signals from a post so a downstream system can decide whether it's worth commenting on.
+
+Output ONLY a JSON object with these fields (no prose, no markdown):
+{
+  "creator": "username or null",
+  "cx_relevant": true/false,  // involves IcePoseidon, CX crew (KangJoel, SJC, Tazo, ABZ, Ac7onman, ChickenAndy, SHoovy, EBZ, SamPepper, Taemin, Xenathewitch, NickWhite, BurgerPlanet, MANDO, Nanatty, NickLee, Suspendas) or known drama
+  "has_hook": true/false,  // is there something specific to react to (detail, contradiction, callback, irony)
+  "hook_description": "short description of the hook or null",
+  "content_type": "drama|milestone|collab|gameplay|irl|vlog|promo|generic",
+  "farming_signal": true/false,  // looks like engagement bait with no substance
+  "post_age_minutes": number or null,  // estimate if inferable
+  "tone": "neutral|hype|sad|funny|drama"
+}`;
+
+async function analyzePost(post) {
+  if (!GROQ_KEY) return null;
+  const client = new Groq({ apiKey: GROQ_KEY });
+  const caption = (post.caption || "").trim().substring(0, 500);
+  const creator = post._creator?.username || "unknown";
+  const userMsg = [
+    `Creator: @${creator}`,
+    caption ? `Caption: "${caption}"` : "Caption: (none)",
+    `Content type: ${post.contentType || "unknown"}`,
+    `Likes: ${post.likeCount || 0}, Comments: ${post.commentCount || 0}`,
+  ].join("\n");
+
+  try {
+    const msg = await client.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      max_tokens: 200,
+      response_format: { type: "json_object" },
+      messages: [{ role: "system", content: ANALYZE_PROMPT }, { role: "user", content: userMsg }],
+    });
+    return JSON.parse(msg.choices[0].message.content);
+  } catch (e) { console.error("[groq] analyze error:", e.message); return null; }
+}
+
+// ─── Prompt 2: Comment decision (score 0-10) ──────────────────────────────────
+const DECIDE_PROMPT = `${TYLER_PERSONA}
+
+You receive a structured analysis of a Club.com post. Decide if Tyler would comment on it.
+
+Score 0-10 on "Tyler's likelihood of typing something here":
+- 0-3: Tyler scrolls past. Generic, no hook, nothing to say.
+- 4-5: Borderline. Mildly interesting but nothing specific to push back on.
+- 6-7: Tyler pauses. There's a specific detail, callback, or contradiction worth noting.
+- 8-10: Tyler definitely comments. CX drama, clear callback, something objectively off.
+
+Rules:
+- farming_signal = true → subtract 3 (Tyler ignores bait)
+- cx_relevant = true and has_hook = true → add 2
+- content_type = "promo" or "generic" → subtract 2
+- post_age old or very fresh and no hook → subtract 1
+
+Output ONLY a JSON object: {"score": number, "reason": "one sentence"}`;
+
+async function shouldCommentOnPost(analysis) {
+  if (!GROQ_KEY || !analysis) return { score: 0, reason: "no analysis" };
+  const client = new Groq({ apiKey: GROQ_KEY });
+  const userMsg = `Post analysis:\n${JSON.stringify(analysis, null, 2)}\n\nScore Tyler's likelihood to comment:`;
+  try {
+    const msg = await client.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      max_tokens: 80,
+      response_format: { type: "json_object" },
+      messages: [{ role: "system", content: DECIDE_PROMPT }, { role: "user", content: userMsg }],
+    });
+    return JSON.parse(msg.choices[0].message.content);
+  } catch (e) { console.error("[groq] decide error:", e.message); return { score: 0, reason: "error" }; }
+}
+
+// ─── Jury system: 3 jurors vote on generated comment ─────────────────────────
+const JURY_PROMPTS = {
+  linguist: `You are a linguistics expert reviewing a comment for naturalness. Your only question: does this sound like a real 23yo American typed it fast, or does it sound generated?
+
+DELETE if:
+- Any banned words: "w", "L", "facts", "based", "ngl", "bro", "fire", "fair enough", "lowkey", "literally", "great content", "amazing", "wild", "crazy", "insane"
+- AI sentence structure: "this one would X", "genuinely X", "honestly X", "not gonna lie X"
+- Overly complete sentences that no one types in a comment box
+- Perfect grammar where a human would contract or skip punctuation
+
+KEEP if: sounds like rapid natural typing, lowercase, specific, imperfect-but-not-try-hard
+
+Reply with exactly: KEEP or DELETE`,
+
+  sociologist: `You are a social dynamics expert reviewing whether this comment will read as authentic or bot-like in a streaming community context.
+
+DELETE if:
+- The comment is generic enough to fit on ANY post (not specific to this one)
+- It's reacting to a vibe or energy instead of a concrete detail
+- It's the kind of thing someone says to seem relatable rather than because they actually noticed something
+- It references facts or events not supported by the caption
+
+KEEP if: reacts to something specific and observable in the post
+
+Reply with exactly: KEEP or DELETE`,
+
+  paranoid: `You are a paranoid platform moderator looking for bot patterns.
+
+DELETE if:
+- Any word from the banned list: "w", "L", "facts", "real", "based", "wild", "crazy", "insane", "unreal", "fire", "heat", "slaps", "bussin", "let's go", "ngl", "bro", "fam", "lowkey", "literally", "fr fr", "no cap", "great content", "keep it up", "love this", "amazing"
+- The comment could apply to 1000 different posts without modification
+- It's a single word or fragment with no meaning
+- It sounds like praise or engagement farming
+
+KEEP if: specific, grounded in actual post content, sounds like someone who watched the thing
+
+Reply with exactly: KEEP or DELETE`,
+};
+
+async function juryVote(caption, comment) {
+  if (!GROQ_KEY) return true;
+  const client = new Groq({ apiKey: GROQ_KEY });
+  const ctx = [
+    caption ? `Post caption: "${caption.substring(0, 300)}"` : "Post caption: (none)",
+    `Comment to review: "${comment}"`,
+  ].join("\n");
+
+  const votes = await Promise.all(
+    Object.entries(JURY_PROMPTS).map(async ([name, sysprompt]) => {
+      try {
+        const msg = await client.chat.completions.create({
+          model: "llama-3.3-70b-versatile",
+          max_tokens: 5,
+          messages: [{ role: "system", content: sysprompt }, { role: "user", content: ctx }],
+        });
+        const v = msg.choices[0].message.content.trim().toUpperCase();
+        const keep = v.startsWith("KEEP");
+        console.log(`  [jury:${name}] ${keep ? "✅ KEEP" : "❌ DELETE"}`);
+        return keep;
+      } catch (e) { console.error(`[jury:${name}] error:`, e.message); return true; } // benefit of doubt on error
+    })
+  );
+
+  const keepVotes = votes.filter(Boolean).length;
+  console.log(`  [jury] result: ${keepVotes}/3 KEEP`);
+  return keepVotes >= 2; // majority rules — 2/3 needed to post
+}
+
+const REPLY_PROMPT = `${TYLER_PERSONA}
+
+Someone replied to your comment on Club.com.
 
 You will receive:
 - The original post context (what the post was about)
@@ -218,13 +415,14 @@ HOW TO REPLY (if you do):
 
 Return your reply text only, or empty string if not worth responding.`;
 
-async function generateComment(post) {
+async function generateComment(post, analysis) {
   if (!GROQ_KEY) return null;
   const client = new Groq({ apiKey: GROQ_KEY });
   const caption = (post.caption || "").trim().substring(0, 400);
+  const hookHint = analysis?.hook_description ? `\n[Analysis hook: ${analysis.hook_description}]` : "";
   const userMsg = caption
-    ? `Post caption: "${caption}"\n\nWrite your comment (or empty string to skip):`
-    : `Post type: ${post.contentType || "media"}, no caption.\n\nWrite your comment (or empty string to skip):`;
+    ? `Post caption: "${caption}"${hookHint}\n\nWrite your comment (or empty string to skip):`
+    : `Post type: ${post.contentType || "media"}, no caption.${hookHint}\n\nWrite your comment (or empty string to skip):`;
   try {
     const msg = await client.chat.completions.create({
       model: "llama-3.3-70b-versatile",
@@ -346,7 +544,7 @@ async function checkAndHandleReplies(state, history) {
         console.log(`[reply] @${reply.user?.username} replied: "${(reply.text||"").substring(0,60)}" → ${decide ? "responding" : "ignoring"}`);
 
         if (decide) {
-          await sleep(rand(5000, 15000)); // small pause before generating reply
+          await sleep(pace(3000, 10000)); // small pause before generating reply
           const replyText = await generateReply(ourComment.caption, ourComment.comment, reply.text || "", reply.user?.username || "user");
           if (replyText) {
             const res = await api("POST", `/api/feed/${ourComment.postId}/comments`, { text: replyText, parentId: ourComment.commentId });
@@ -363,7 +561,7 @@ async function checkAndHandleReplies(state, history) {
                 replyingToUser: reply.user?.username,
               });
               console.log(`[reply] sent: "${replyText}"`);
-              await sleep(rand(8000, 20000));
+              await sleep(pace(5000, 15000));
             }
           }
         }
@@ -399,7 +597,7 @@ async function runSession(state, history) {
 
   // 3. Determine comment budget for today
   const done = commentsToday(history);
-  const budget = persona.getSessionCommentBudget(done);
+  const budget = process.env.FORCE_SESSION ? 1 : persona.getSessionCommentBudget(done);
   console.log(`[session] comments today: ${done}, budget this session: ${budget}`);
 
   if (budget === 0) {
@@ -449,7 +647,7 @@ async function runSession(state, history) {
 
   for (const post of likeCandidates.sort(() => Math.random() - 0.5)) {
     if (liked >= likeCount) break;
-    await sleep(rand(2000, 6000));
+    await sleep(pace(1000, 4000));
     const r = await api("POST", `/api/feed/${post.id}/likes`, {});
     if (r && !r._error) {
       state.liked.push(post.id);
@@ -483,12 +681,43 @@ async function runSession(state, history) {
         continue;
       }
 
+      // #4 Timing window: skip posts < 20min or > 3h old
+      const postAgeMin = post.createdAt
+        ? (Date.now() - new Date(post.createdAt).getTime()) / 60000
+        : null;
+      if (postAgeMin !== null && !process.env.FORCE_SESSION) {
+        if (postAgeMin < 20) {
+          console.log(`[session] skipping @${creator.username} — too fresh (${Math.round(postAgeMin)}min)`);
+          continue;
+        }
+        if (postAgeMin > 180) {
+          console.log(`[session] skipping @${creator.username} — too old (${Math.round(postAgeMin)}min)`);
+          continue;
+        }
+      }
+
+      // #7 Double context analysis — Prompt 1: analyze post
+      console.log(`[session] analyzing post from @${creator.username}...`);
+      const analysis = await analyzePost(post);
+      if (analysis) {
+        console.log(`[session] analysis: cx_relevant=${analysis.cx_relevant}, has_hook=${analysis.has_hook}, type=${analysis.content_type}, farming=${analysis.farming_signal}`);
+      }
+
+      // #7 Double context analysis — Prompt 2: score/decide
+      const decision = await shouldCommentOnPost(analysis);
+      const COMMENT_THRESHOLD = 6;
+      console.log(`[session] decision score: ${decision.score}/10 — ${decision.reason}`);
+      if (!process.env.FORCE_SESSION && decision.score < COMMENT_THRESHOLD) {
+        console.log(`[session] skipping @${creator.username} — score too low (${decision.score} < ${COMMENT_THRESHOLD})`);
+        continue;
+      }
+
       // Visit profile
       if (!state.visited.includes(creator.username)) {
         await api("POST", "/api/users/me/profile-visits", { creatorId: creator.id });
         state.visited.push(creator.username);
         if (state.visited.length > 500) state.visited = state.visited.slice(-300);
-        await sleep(rand(1500, 4000));
+        await sleep(pace(800, 2500));
       }
 
       // Follow (sometimes)
@@ -499,15 +728,15 @@ async function runSession(state, history) {
           logFollow(history, creator.username);
           recordInteraction(state, creator.username);
           console.log(`[session] followed @${creator.username}`);
-          await sleep(rand(2000, 5000));
+          await sleep(pace(1200, 3500));
         }
       }
 
       // Simulate reading the post
-      await sleep(rand(3000, 8000));
+      await sleep(pace(2000, 6000));
 
-      // Generate comment
-      const comment = await generateComment(post);
+      // Generate comment (with analysis context passed in)
+      const comment = await generateComment(post, analysis);
       if (!comment) { console.log(`[session] nothing to say on @${creator.username}`); continue; }
 
       // Post it
@@ -516,17 +745,27 @@ async function runSession(state, history) {
 
       const commentId = res.id || res.data?.id;
 
+      // #1 Jury system: 3 jurors vote, 2/3 needed to keep
+      console.log(`[session] jury voting on: "${comment}"`);
+      const juryApproved = await juryVote(caption, comment);
+      if (!juryApproved) {
+        console.log(`[session] ❌ jury rejected — deleting and trying next post`);
+        await api("DELETE", `/api/feed/${post.id}/comments/${commentId}`, null);
+        await sleep(pace(2000, 5000));
+        continue;
+      }
+
       // Self-verify: re-read comment in context, delete if wrong
       console.log(`[session] verifying: "${comment}"`);
       const approved = await verifyComment(caption, comment);
       if (!approved) {
         console.log(`[session] ❌ verification failed — deleting and trying next post`);
         await api("DELETE", `/api/feed/${post.id}/comments/${commentId}`, null);
-        await sleep(rand(3000, 7000));
+        await sleep(pace(2000, 5000));
         continue;
       }
 
-      console.log(`[session] ✅ verified — keeping: "${comment}"`);
+      console.log(`[session] ✅ jury + verify passed — keeping: "${comment}"`);
       state.commented.push(post.id);
       if (state.commented.length > 2000) state.commented = state.commented.slice(-1500);
       commented++;
@@ -541,17 +780,17 @@ async function runSession(state, history) {
 
       // Like after commenting — with human delay (amélioration #5 partiel)
       if (Math.random() < 0.55) {
-        await sleep(rand(30000, 90000)); // Tyler reads other comments first
+        await sleep(pace(12000, 45000)); // Tyler reads other comments first
         await api("POST", `/api/feed/${post.id}/likes`, {});
       }
 
-      await sleep(rand(15000, 35000));
+      await sleep(pace(8000, 22000));
     } catch (e) {
       console.error(`[session] error on @${creator.username}:`, e.message);
     }
 
     saveState(state);
-    await sleep(rand(8000, 20000));
+    await sleep(pace(4000, 12000));
   }
 
   state.sessionCount++;

@@ -1,5 +1,6 @@
 auth.json
 cookies.json
+cookies_cxfan.json
 accounts/*/session.json
 anthropic_key.txt
 *.log
@@ -8,3 +9,8 @@ logs/
 __pycache__/
 debug_*.png
 tmp_cookies/
+node_modules/
+.env
+state_cxfan.json
+history_cxfan.json
+run-bot.cmd
