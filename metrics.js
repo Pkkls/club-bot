@@ -4,9 +4,10 @@
  * Also detects who followed us back (for network H).
  */
 
-const https = require("https");
-const fs    = require("fs");
-const path  = require("path");
+const https  = require("https");
+const fs     = require("fs");
+const path   = require("path");
+const { updateEngagementScore } = require("./creators");
 
 const COOKIES_FILE = path.join(process.cwd(), "cookies_cxfan.json");
 
@@ -44,7 +45,7 @@ function apiGet(endpoint) {
   });
 }
 
-async function checkCommentMetrics(history) {
+async function checkCommentMetrics(history, state) {
   const now      = Date.now();
   const hours72  = 72 * 3600000;
   const unchecked = history.comments.filter(c =>
@@ -80,6 +81,8 @@ async function checkCommentMetrics(history) {
 
       c.checked = true;
       console.log(`[metrics] @${c.creator}: ${c.likesReceived || 0} likes, ${c.repliesReceived || 0} replies`);
+      // #D — update cold score
+      if (state) updateEngagementScore(state, c.creator, c.likesReceived || 0, c.repliesReceived || 0);
     } catch (e) {
       console.error(`[metrics] error on ${c.commentId}:`, e.message);
     }

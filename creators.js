@@ -64,10 +64,50 @@ function recordInteraction(state, username) {
   if (net[username]) net[username].interactionCount++;
 }
 
+// #B — Store creator theme/topic from a post caption
+function storeCreatorTheme(state, username, caption) {
+  if (!caption || caption.length < 20) return;
+  const net = getNetwork(state);
+  if (!net[username]) return;
+  if (!net[username].themes) net[username].themes = [];
+  const snippet = caption.substring(0, 80).replace(/\s+/g, " ").trim();
+  net[username].themes.push(snippet);
+  if (net[username].themes.length > 5) net[username].themes.shift(); // keep last 5
+}
+
+// #B — Get creator themes for context injection
+function getCreatorThemes(state, username) {
+  const net = getNetwork(state);
+  return net[username]?.themes || [];
+}
+
+// #D — Update engagement score after 72h metrics check
+// If last 3 checked comments on a creator all had 0 engagement → mark as cold
+function updateEngagementScore(state, username, likesReceived, repliesReceived) {
+  const net = getNetwork(state);
+  if (!net[username]) return;
+  if (!net[username].engagementHistory) net[username].engagementHistory = [];
+  net[username].engagementHistory.push(likesReceived + repliesReceived);
+  if (net[username].engagementHistory.length > 5) net[username].engagementHistory.shift();
+
+  // Cold = last 3 checks all 0
+  const last3 = net[username].engagementHistory.slice(-3);
+  if (last3.length >= 3 && last3.every(v => v === 0)) {
+    if (!net[username].cold) {
+      console.log(`[creators] @${username} marked cold — 3 comments with 0 engagement`);
+      net[username].cold = true;
+    }
+  } else if (net[username].cold && (likesReceived + repliesReceived) > 0) {
+    // Got engagement → unmark cold
+    net[username].cold = false;
+    console.log(`[creators] @${username} un-marked cold — got engagement`);
+  }
+}
+
 // Sort candidates by priority:
 // 1. Trending creators (fast growth)
 // 2. Creators we've interacted with before (favorites)
-// 3. Everyone else
+// 3. Cold creators (3x 0 engagement) go last
 function prioritize(candidates, state) {
   const net = getNetwork(state);
 
@@ -77,8 +117,8 @@ function prioritize(candidates, state) {
     const na = net[ua] || {};
     const nb = net[ub] || {};
 
-    const scoreA = (na.trending ? 100 : 0) + (na.interactionCount || 0) * 10;
-    const scoreB = (nb.trending ? 100 : 0) + (nb.interactionCount || 0) * 10;
+    const scoreA = (na.trending ? 100 : 0) + (na.interactionCount || 0) * 10 - (na.cold ? 50 : 0);
+    const scoreB = (nb.trending ? 100 : 0) + (nb.interactionCount || 0) * 10 - (nb.cold ? 50 : 0);
 
     return scoreB - scoreA;
   });
@@ -94,4 +134,4 @@ function getTrending(state) {
     .slice(0, 5);
 }
 
-module.exports = { trackCreator, recordInteraction, prioritize, getTrending };
+module.exports = { trackCreator, recordInteraction, prioritize, getTrending, storeCreatorTheme, getCreatorThemes, updateEngagementScore };

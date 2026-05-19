@@ -16,7 +16,7 @@ const path       = require("path");
 const persona    = require("./persona");
 const { sendDailyDigest, sendMessage, checkCommands } = require("./telegram");
 const { ensureLoggedIn }                        = require("./session");
-const { trackCreator, recordInteraction, prioritize, getTrending } = require("./creators");
+const { trackCreator, recordInteraction, prioritize, getTrending, storeCreatorTheme, getCreatorThemes, updateEngagementScore } = require("./creators");
 const { checkCommentMetrics }                   = require("./metrics");
 
 puppeteer.use(Stealth());
@@ -254,7 +254,7 @@ Output ONLY a JSON object with these fields (no prose, no markdown):
   "tone": "neutral|hype|sad|funny|drama"
 }`;
 
-async function analyzePost(post) {
+async function analyzePost(post, creatorThemes = [], momentumSignal = null) {
   if (!GROQ_KEY) return null;
   const client = new Groq({ apiKey: GROQ_KEY });
   const caption = (post.caption || "").trim().substring(0, 500);
@@ -264,7 +264,9 @@ async function analyzePost(post) {
     caption ? `Caption: "${caption}"` : "Caption: (none)",
     `Content type: ${post.contentType || "unknown"}`,
     `Likes: ${post.likeCount || 0}, Comments: ${post.commentCount || 0}`,
-  ].join("\n");
+    creatorThemes.length > 0 ? `Creator's recent post topics: ${creatorThemes.join(" | ")}` : null,
+    momentumSignal ? `Momentum: ${momentumSignal}` : null,
+  ].filter(Boolean).join("\n");
 
   try {
     const msg = await client.chat.completions.create({
@@ -500,10 +502,26 @@ async function generateReply(postCaption, originalComment, theirReply, theirUser
 
 // ─── Score posts ──────────────────────────────────────────────────────────────
 function scorePost(p) {
-  const likes = p.likeCount || 0;
+  const likes   = p.likeCount || 0;
   const comments = p.commentCount || 0;
-  const age_h = (Date.now() - new Date(p.createdAt || 0).getTime()) / 3600000;
-  return (likes + (p.tipCount||0)*10) * (1 - Math.min(comments/(likes+1), 0.5)) * (0.5 + Math.max(0, 1-age_h/48)*0.5);
+  const age_h   = (Date.now() - new Date(p.createdAt || 0).getTime()) / 3600000;
+  const base    = (likes + (p.tipCount||0)*10) * (1 - Math.min(comments/(likes+1), 0.5)) * (0.5 + Math.max(0, 1-age_h/48)*0.5);
+
+  // #C Momentum: likes per hour — posts gaining fast get a boost
+  const likeVelocity = age_h > 0.1 ? likes / age_h : 0;
+  const momentumBoost = likeVelocity > 20 ? 1.5 : likeVelocity > 8 ? 1.2 : 1.0;
+
+  return base * momentumBoost;
+}
+
+// #C — Returns momentum signal string for context
+function getMomentumSignal(p) {
+  const likes = p.likeCount || 0;
+  const age_h = Math.max(0.1, (Date.now() - new Date(p.createdAt || 0).getTime()) / 3600000);
+  const v = likes / age_h;
+  if (v > 20) return "high momentum — gaining likes very fast";
+  if (v > 8)  return "moderate momentum";
+  return null;
 }
 
 // ─── Reply checking ───────────────────────────────────────────────────────────
@@ -696,9 +714,17 @@ async function runSession(state, history) {
         }
       }
 
+      // #B — Store this post's theme in creator memory, inject past themes into analysis
+      storeCreatorTheme(state, creator.username, caption);
+      const creatorThemes = getCreatorThemes(state, creator.username);
+
+      // #C — Compute momentum signal
+      const momentumSignal = getMomentumSignal(post);
+      if (momentumSignal) console.log(`[session] momentum: ${momentumSignal}`);
+
       // #7 Double context analysis — Prompt 1: analyze post
       console.log(`[session] analyzing post from @${creator.username}...`);
-      const analysis = await analyzePost(post);
+      const analysis = await analyzePost(post, creatorThemes, momentumSignal);
       if (analysis) {
         console.log(`[session] analysis: cx_relevant=${analysis.cx_relevant}, has_hook=${analysis.has_hook}, type=${analysis.content_type}, farming=${analysis.farming_signal}`);
       }
@@ -826,7 +852,7 @@ async function main() {
     // Check token validity — if invalid, attempt login via Puppeteer
     await ensureLoggedIn(null, EMAIL, PASSWORD);
 
-    await checkCommentMetrics(history);
+    await checkCommentMetrics(history, state);
     await runSession(state, history);
     saveState(state);
 
