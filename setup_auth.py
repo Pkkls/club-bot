@@ -1,11 +1,13 @@
-import sys, time
+import os, sys, time
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 AUTH_FILE = Path(__file__).parent / "auth.json"
-EMAIL = "zezegerb@gmail.com"
-PASSWORD = "Cu@lann00b"
+EMAIL = os.environ.get("CLUB_EMAIL")
+PASSWORD = os.environ.get("CLUB_PASSWORD")
+if not EMAIL or not PASSWORD:
+    sys.exit("CLUB_EMAIL and CLUB_PASSWORD must be set in the environment (.env)")
 
 with sync_playwright() as pw:
     browser = pw.chromium.launch(headless=False, channel="chrome",
